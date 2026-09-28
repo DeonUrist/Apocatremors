@@ -6,5 +6,5 @@ mcs -nostdlib -noconfig -target:library -langversion:latest -optimize+ -out:${1:
   -r:$B/BepInEx.dll \
   -r:$M/UnityEngine.dll -r:$M/UnityEngine.CoreModule.dll -r:$M/UnityEngine.PhysicsModule.dll \
   -r:$M/UnityEngine.TerrainModule.dll -r:$M/UnityEngine.TerrainPhysicsModule.dll -r:$M/UnityEngine.ParticleSystemModule.dll \
-  -r:$M/Unity.InputSystem.dll -r:$M/PlayMaker.dll -r:$M/Assembly-CSharp.dll \
-  Plugin.cs Catalog.cs Tremors.cs
+  -r:$M/UnityEngine.UI.dll -r:$M/UnityEngine.UIModule.dll -r:$M/UnityEngine.TextRenderingModule.dll -r:$M/Unity.InputSystem.dll -r:$M/PlayMaker.dll -r:$M/Assembly-CSharp.dll \
+  Plugin.cs Catalog.cs Tremors.cs Notice.cs

@@ -17,7 +17,9 @@ namespace Apocatremors
         private float _nextRefScan, _nextDriveScan, _nextSlowTick;
 
         // ambush state
-        private float _cooldown = -1f;
+        private float _cooldown = -1f;       // in "heat 100 %" seconds
+        private float _travelKm, _heat;
+        private PlayMakerFSM _distanceFsm;
         private int _retries;
         private readonly List<GameObject> _alive = new List<GameObject>();
         private readonly List<Emerge> _emerging = new List<Emerge>();
@@ -42,6 +44,9 @@ namespace Apocatremors
             _inst._poiInfo.Clear();
             _inst._pois.Clear();
             _inst._cooldown = -1f;
+            _inst._distanceFsm = null;
+            _inst._travelKm = _inst._heat = 0f;
+            Notice.Reset();
             _inst._retries = 0;
             Catalog.Invalidate();
         }
@@ -55,6 +60,7 @@ namespace Apocatremors
         private void Tick()
         {
             float dt = Time.deltaTime;
+            Notice.Tick(dt);
             for (int i = _emerging.Count - 1; i >= 0; i--)
                 if (_emerging[i].Step(dt)) _emerging.RemoveAt(i);
 
@@ -71,11 +77,12 @@ namespace Apocatremors
 
             float kmh = carRb.velocity.magnitude * 3.6f;
             if (kmh < Plugin.MinSpeedKmh.Value) return;     // stationary / crawling: the clock stops
+            if (_heat <= 0f) return;                         // at the start area: no ambushes
             if (_cooldown < 0f) ResetCooldown();
-            _cooldown -= dt;
+            _cooldown -= dt * (Plugin.HeatScalesCooldown.Value ? _heat : 1f);
             if (_cooldown > 0f) return;
 
-            Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), null, false);
+            Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), null, false, kmh);
         }
 
         // ------------------------------------------------------------------ game state
@@ -123,6 +130,7 @@ namespace Apocatremors
 
         private void SlowTick()
         {
+            UpdateHeat();
             _alive.RemoveAll(g => g == null);
             float d = Plugin.DespawnDistance.Value;
             if (d <= 0f || _alive.Count == 0) return;
@@ -140,6 +148,32 @@ namespace Apocatremors
             }
         }
 
+        // Heat from the game's own "Distance Travelled" (__GameManager__ [DistanceTravelled].distance = km from Starter_Area,
+        // refreshed by the game every 5 s); 0 km = 0 %, +HeatPer10Km per 10 km, capped at MaxHeat.
+        private void UpdateHeat()
+        {
+            if (_distanceFsm == null || _distanceFsm.gameObject == null)
+            {
+                _distanceFsm = null;
+                var gm = GameObject.Find("__GameManager__");
+                if (gm != null) foreach (var f in gm.GetComponents<PlayMakerFSM>()) if (f.FsmName == "DistanceTravelled") { _distanceFsm = f; break; }
+            }
+            float km = -1f;
+            if (_distanceFsm != null && _distanceFsm.Fsm.Initialized)
+            {
+                var v = _distanceFsm.FsmVariables.GetFsmFloat("distance");
+                if (v != null) km = v.Value;
+            }
+            if (km < 0f)
+            {
+                var pl = GameObject.Find("Player"); var st = GameObject.Find("Starter_Area");
+                if (pl != null && st != null) km = Vector3.Distance(pl.transform.position, st.transform.position) / 1000f;
+            }
+            if (km < 0f) return;
+            _travelKm = km;
+            _heat = Mathf.Clamp(km / 10f * Mathf.Max(0f, Plugin.HeatPer10Km.Value), 0f, Mathf.Max(0.01f, Plugin.MaxHeat.Value));
+        }
+
         private static bool PlayerPos(out Vector3 p)
         {
             var pl = GameObject.Find("Player");
@@ -154,7 +188,8 @@ namespace Apocatremors
             float a = Mathf.Max(1f, Plugin.CooldownMinSeconds.Value), b = Mathf.Max(a, Plugin.CooldownMaxSeconds.Value);
             _cooldown = UnityEngine.Random.Range(a, b);
             _retries = 0;
-            Plugin.Verbose("Next ambush roll in " + _cooldown.ToString("0") + " s of driving");
+            Plugin.Verbose("Next ambush roll in " + _cooldown.ToString("0") + " s of driving at heat 100 % (now " +
+                (_heat * 100f).ToString("0") + " % at " + _travelKm.ToString("0.0") + " km)");
         }
 
         // ------------------------------------------------------------------ ambush
@@ -164,16 +199,16 @@ namespace Apocatremors
             var forced = Catalog.Find(Plugin.TestType.Value);
             if (!string.IsNullOrEmpty(Plugin.TestType.Value) && forced == null)
                 Plugin.Log.LogWarning("TestType '" + Plugin.TestType.Value + "' is not in the creature catalog");
-            if (car != null && carRb != null) { Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), forced, true); return; }
+            if (car != null && carRb != null) { Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), forced, true, carRb.velocity.magnitude * 3.6f); return; }
             var cam = Camera.main;
             if (cam == null) return;
             Vector3 origin = cam.transform.position;
             RaycastHit h;
             if (Physics.Raycast(origin, Vector3.down, out h, 10f, ~0, QueryTriggerInteraction.Ignore)) origin = h.point;
-            Ambush(origin, Flat(Vector3.zero, cam.transform.forward), forced, true);
+            Ambush(origin, Flat(Vector3.zero, cam.transform.forward), forced, true, 0f);
         }
 
-        private void Ambush(Vector3 origin, Vector3 dir, Creature forced, bool test)
+        private void Ambush(Vector3 origin, Vector3 dir, Creature forced, bool test, float kmh)
         {
             _alive.RemoveAll(g => g == null);
             if (!test && _alive.Count + _emerging.Count >= Plugin.MaxAlive.Value)
@@ -181,29 +216,37 @@ namespace Apocatremors
                 Plugin.Verbose("Ambush skipped: " + _alive.Count + " creatures still alive");
                 _cooldown = 20f; return;
             }
+            float km = _travelKm;
+            Func<Creature, bool> allowed = x => x.Allowed(kmh, km);
+            if (test) allowed = x => x.Chance.Value > 0f;    // the test key ignores speed and travel limits
             var c = forced;
             if (c == null)
             {
-                c = Catalog.Roll();
+                c = Catalog.Roll(allowed);
                 if (c == null && test) c = Catalog.Creatures.Where(x => x.Chance.Value > 0f).OrderBy(x => UnityEngine.Random.value).FirstOrDefault()
                                             ?? Catalog.Creatures.FirstOrDefault();
             }
             if (c == null)
             {
-                Plugin.Verbose("Ambush roll: nothing (" + Catalog.TotalChance().ToString("0.#") + " % total)");
+                Plugin.Verbose("Ambush roll: nothing (" + Catalog.TotalChance(allowed).ToString("0.#") + " % total for " +
+                    kmh.ToString("0") + " km/h at " + km.ToString("0.0") + " km)");
                 ResetCooldown(); return;
             }
 
             float r = Mathf.Max(Plugin.ClearRadius.Value, c.Radius + 0.5f);
             Vector3 ground; string why = "";
-            if (!FindSpot(origin, dir, r, out ground, ref why))
+            if (!FindSpot(origin, dir, r, c, out ground, ref why))
             {
                 if (!test && ++_retries < 5) { _cooldown = 3f; Plugin.Verbose("No spot for " + c.Key + " (" + why + "), retry " + _retries); }
                 else { Plugin.Log.LogInfo("No valid spawn spot for " + c.Key + " (" + why + ")"); if (!test) ResetCooldown(); }
                 return;
             }
 
-            int n = Mathf.Max(1, UnityEngine.Random.Range(Mathf.Max(1, Plugin.GroupMin.Value), Mathf.Max(Plugin.GroupMin.Value, Plugin.GroupMax.Value) + 1));
+            int gMin = Mathf.Max(1, c.GroupMin.Value), gMax = Mathf.Max(gMin, c.GroupMax.Value);
+            int baseN = UnityEngine.Random.Range(gMin, gMax + 1);
+            int n = baseN;
+            if (!test && Plugin.HeatScalesGroup.Value) n = Mathf.Max(1, Mathf.FloorToInt(baseN * _heat + 0.5f));
+            if (!test) n = Mathf.Min(n, Mathf.Max(1, Plugin.MaxAlive.Value - _alive.Count - _emerging.Count));
             var spots = new List<Vector3> { ground };
             for (int i = 1; i < n; i++)
                 for (int k = 0; k < 8; k++)
@@ -213,7 +256,10 @@ namespace Apocatremors
                     if (ValidSpot(ground + off, origin.y, r, out g2, ref w2) && spots.All(s => (s - g2).sqrMagnitude > 4f * r * r)) { spots.Add(g2); break; }
                 }
 
-            Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + " at " + Vector3.Distance(origin, ground).ToString("0") + " m" + (test ? " (test)" : ""));
+            Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + " at " + Vector3.Distance(origin, ground).ToString("0") + " m, heat " +
+                (_heat * 100f).ToString("0") + " % (" + _travelKm.ToString("0.0") + " km)" + (test ? " (test)" : ""));
+            Notice.Show((Plugin.NotificationText.Value ?? "")
+                .Replace("{plural}", c.Plural.Value).Replace("{name}", c.Name.Value).Replace("{count}", spots.Count.ToString()));
             float delay = 0f;
             foreach (var s in spots)
             {
@@ -224,9 +270,9 @@ namespace Apocatremors
             if (!test) ResetCooldown();
         }
 
-        private bool FindSpot(Vector3 origin, Vector3 dir, float r, out Vector3 ground, ref string why)
+        private bool FindSpot(Vector3 origin, Vector3 dir, float r, Creature c, out Vector3 ground, ref string why)
         {
-            float dMin = Mathf.Max(5f, Plugin.DistanceMin.Value), dMax = Mathf.Max(dMin, Plugin.DistanceMax.Value);
+            float dMin = Mathf.Max(5f, c.DistanceMin.Value), dMax = Mathf.Max(dMin, c.DistanceMax.Value);
             float spread = Mathf.Clamp(Plugin.SpreadAngle.Value, 0f, 180f);
             var reasons = new Dictionary<string, int>();
             for (int i = 0; i < MaxTries; i++)
@@ -353,6 +399,7 @@ namespace Apocatremors
             private readonly List<Collider> _cols = new List<Collider>();
             private Rigidbody _rb;
             private bool _wasKinematic;
+            private CollisionDetectionMode _cd;
 
             public Emerge(Tremors owner, Creature c, Vector3 ground, Quaternion rot, float delay)
             {
@@ -422,7 +469,13 @@ namespace Apocatremors
                 foreach (var f in _go.GetComponentsInChildren<PlayMakerFSM>(true)) if (f.enabled) { f.enabled = false; _fsms.Add(f); }
                 foreach (var col in _go.GetComponentsInChildren<Collider>(true)) if (col.enabled) { col.enabled = false; _cols.Add(col); }
                 _rb = _go.GetComponent<Rigidbody>();
-                if (_rb != null) { _wasKinematic = _rb.isKinematic; _rb.isKinematic = true; }
+                if (_rb != null)
+                {
+                    _wasKinematic = _rb.isKinematic; _cd = _rb.collisionDetectionMode;
+                    if (_cd == CollisionDetectionMode.Continuous || _cd == CollisionDetectionMode.ContinuousDynamic)
+                        _rb.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+                    _rb.isKinematic = true;
+                }
                 Name(_go, _c.Prefab.name);
 
                 float top = 2f, bottom = 0f;
@@ -451,7 +504,12 @@ namespace Apocatremors
             {
                 foreach (var col in _cols) if (col != null) col.enabled = true;
                 _cols.Clear();
-                if (_rb != null) { _rb.isKinematic = _wasKinematic; if (!_wasKinematic) { _rb.velocity = Vector3.zero; _rb.angularVelocity = Vector3.zero; } }
+                if (_rb != null)
+                {
+                    _rb.isKinematic = _wasKinematic;
+                    if (!_wasKinematic) { _rb.collisionDetectionMode = _cd; _rb.velocity = Vector3.zero; _rb.angularVelocity = Vector3.zero; }
+                    _rb = null;
+                }
                 foreach (var f in _fsms) if (f != null) f.enabled = true;
                 _fsms.Clear();
             }
