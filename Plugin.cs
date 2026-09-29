@@ -18,7 +18,7 @@ namespace Apocatremors
     {
         public const string GUID = "com.denis.apocalypter.apocatremors";
         public const string NAME = "Apocatremors";
-        public const string VERSION = "0.3.0";
+        public const string VERSION = "0.3.1";
 
         internal static ManualLogSource Log;
         internal static ConfigFile Cfg;
