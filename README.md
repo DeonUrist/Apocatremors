@@ -26,33 +26,41 @@ The farther you get from the starting area, the more often they come and the big
 - **Boss kills** = the game's global `Boss_*` flags (the boss list on the player sheet).
 - Respects the game's peaceful mode.
 
-## Per-creature settings — `[Mutants: <prefab>]` and `[Humans: <prefab>]`
-Created on the first game start for every enemy prefab the game has (traders, friendly-until-attacked NPCs and the `_BACKUP` / `_Sanity`
-variants are left out). Creatures from the game's Scrapyard and Coyotes codex pages go into `[Humans: …]`; they start at 0 % chance and
-never spawn unless you give them a chance. Everything else is under `[Mutants: …]`.
+## Per-creature settings
+One section per enemy prefab the game has (traders, friendly-until-attacked NPCs and the `_BACKUP` / `_Sanity` variants are left out),
+grouped as `[Mutants: <prefab>]`, `[Humans: <prefab>]` (the scrapyard gang and Flexa), `[Bosses: <prefab>]` (the 7 bosses) and
+`[Other: <prefab>]` (enemies the mod doesn't know, e.g. from other mods — empty in the vanilla game).
 Keys: `Chance`, `GroupMin`/`GroupMax` (at 100 % heat), `DistanceMin`/`DistanceMax` (m from the car), `MinCarSpeedKmh`,
 `MinTravelKm`/`MaxTravelKm` (Distance Travelled window, max 0 = none), `MinBossKills` (0–7: how many of the game's 7 bosses must be dead),
-`Name`/`Plural` (for the notification). A creature is only picked when all of its limits are met.
+`Name`/`Plural` (for the notification). A creature is only picked when all of its limits are met; `Chance` 0 = never.
+Humans, bosses and other enemies start at 0 %.
 
-Defaults scale with toughness (prefab health) — tougher creatures come later, after boss kills, in smaller groups, farther away, less often:
+Default chances (the rest of each roll is "nothing"; together they add up to ~106 %, so a roll always spawns something and the values act as weights):
 
-| Health | Examples | Min km | Bosses | Group | Distance | Min km/h | Chance* |
-|---|---|---|---|---|---|---|---|
-| ≤ 15 | rats, small scorpions/spiders, bats | 0 | 0 | 3–5 | 40–80 | 10 | 8 |
-| ≤ 35 | big scorpions/spiders, wasps, blast zombies | 5 | 0 | 2–4 | 45–85 | 15 | 7 |
-| ≤ 60 | zombie runners, hounds, arachnids | 10 | 0 | 2–3 | 50–90 | 15 | 6 |
-| ≤ 100 | nightwalkers, the scrapyard gang | 20 | 1 | 1–2 | 60–100 | 20 | 4 |
-| ≤ 300 | Flexa, Skinwal | 30 | 2 | 1–2 | 70–110 | 25 | 3 |
-| > 300 | Lanky, Juggernaut | 40 | 3 | 1 | 80–120 | 30 | 2 |
-| bosses | Scorpion King … Black Juggernaut | 50–70 | 3–7 | 1 | 90–130 | 30 | 0 |
+| Mutant | Chance | From km | Boss kills | Group |
+|---|---|---|---|---|
+| Burrower | 12 | 0 | 0 | 1–2 |
+| Small Scorpion, Small Spider | 9.44 | 0 | 0 | 3–5 |
+| Wasps, Big Scorpion, Big Spider | 8.44 | 5 | 0 | 2–4 |
+| Zombie Runner, Grimhound, Wild Hound | 7.44 | 10 | 0 | 2–3 |
+| Rat | 6 | 0 | 0 | 3–5 |
+| Arachnid | 6 | 10 | 0 | 2–3 |
+| Nightwalker | 5.44 | 20 | 1 | 1–2 |
+| Teacher | 3 | 25 | 3 | by health |
+| Bat | 2 | 0 | 0 | 3–5 |
+| Lanky | 2 | 10 | 2 | 1 |
+| Skinwal | 2 | 15 | 3 | 1–2 |
+| Blast Rat | 1 | 0 | 0 | 3–5 |
+| Blast Zombie, Yard Hound, Juggernaut | 0 | 5 / 10 / 40 | 0 / 0 / 3 | |
 
-\* Chance only for mutants in the game's own wild mutant/carnivore spawn lists; the other mutants and all humans start at 0.
-The Burrower is the exception: 25 %, from 0 km, groups of 1–2.
+The other defaults come from toughness (prefab health): ≤ 15 hp: 40–80 m, 10 km/h · ≤ 35: 45–85 m, 15 km/h · ≤ 60: 50–90 m, 15 km/h ·
+≤ 100: 20 km, 1 boss, 1–2, 60–100 m, 20 km/h · ≤ 300: 30 km, 2 bosses, 1–2, 70–110 m, 25 km/h · > 300: 40 km, 3 bosses, 1, 80–120 m, 30 km/h.
+Bosses (if enabled): one at a time, 90–130 m, 30 km/h, 50–70 km and 3–7 boss kills by toughness.
 
 ## Config
 `BepInEx\config\com.denis.apocalypter.apocatremors.cfg` (also editable in game through the Apocasetter Mods menu), in this order:
 `[General]` (on/off, notification text/colour/duration), `[Trigger]`, `[Heat]`, `[Placement]`, `[Emerge]`, `[Debug]`, then one
-`[Mutants: <prefab>]` section per mutant and one `[Humans: <prefab>]` section per human. Settings from older versions are removed from the file automatically.
+section per creature: `[Mutants: …]`, `[Humans: …]`, `[Bosses: …]`, `[Other: …]`. Settings from older versions are removed from the file automatically.
 
 `[Debug]`: `TestKey` (default None, e.g. F8) spawns one ambush immediately — ahead of the car, or ahead of the camera on foot —
 ignoring speed, cooldown, heat and all creature limits; `TestType` forces one prefab (e.g. `Burrower`); `Exclude` lists prefab names

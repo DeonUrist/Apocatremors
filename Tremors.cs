@@ -209,7 +209,7 @@ namespace Apocatremors
             {
                 c = Catalog.Roll(allowed);
                 if (c == null && test) c = Catalog.Creatures.Where(x => x.Chance.Value > 0f).OrderBy(x => UnityEngine.Random.value).FirstOrDefault()
-                                            ?? Catalog.Creatures.FirstOrDefault(x => !x.IsHuman);
+                                            ?? Catalog.Creatures.FirstOrDefault(x => x.Group == Catalog.Mutants);
             }
             if (c == null) { Plugin.Verbose("Ambush roll: nothing"); ResetCooldown(); return; }
 

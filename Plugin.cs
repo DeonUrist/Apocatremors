@@ -58,7 +58,7 @@ namespace Apocatremors
             Log.LogInfo(NAME + " " + VERSION + " loaded");
         }
 
-        // Bind order = order in the Apocasetter menu and (via AfterSave) in the file; [Mutants: …] and [Humans: …] follow after [Debug].
+        // Bind order = order in the Apocasetter menu and (via AfterSave) in the file; [Mutants/Humans/Bosses/Other: …] follow after [Debug].
         private void BindGlobals()
         {
             Config.Bind("General", "Apocasetter", true, "Show this mod in the Apocasetter Mods menu");
