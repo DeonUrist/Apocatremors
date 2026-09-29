@@ -15,11 +15,20 @@ namespace Apocatremors
         private readonly List<PlayMakerFSM> _drive = new List<PlayMakerFSM>();
         private float _nextRefScan, _nextDriveScan, _nextSlowTick;
 
-        private float _cooldown = -1f;       // seconds at heat 100 %
+        // One ambush clock per source: the player's car, and (with Apocapatrol) each AI car.
+        private class Clock { public float Cooldown = -1f; public int Retries; public string Label; public float Mult = 1f; }
+        private readonly Clock _player = new Clock { Label = "Player" };
         private float _travelKm, _heat;
         private int _bossKills;
         private PlayMakerFSM _distanceFsm;
-        private int _retries;
+
+        // Apocapatrol (com.denis.apocalypter.apocapatrol): its cars carry a PatrolMarker component; found by reflection, no compile dependency
+        private const string PatrolGuid = "com.denis.apocalypter.apocapatrol";
+        private static Type _markerType;
+        private static bool _patrolChecked;
+        private class AiCar { public GameObject Go; public Rigidbody Rb; public Clock Clock; public bool Seen; }
+        private readonly Dictionary<int, AiCar> _aiCars = new Dictionary<int, AiCar>();
+        private float _nextAiScan;
         private readonly List<GameObject> _alive = new List<GameObject>();
         private readonly List<Emerge> _emerging = new List<Emerge>();
 
@@ -42,8 +51,9 @@ namespace Apocatremors
             _inst._emerging.Clear();
             _inst._poiInfo.Clear();
             _inst._pois.Clear();
-            _inst._cooldown = -1f;
-            _inst._retries = 0;
+            _inst._player.Cooldown = -1f;
+            _inst._player.Retries = 0;
+            _inst._aiCars.Clear();
             _inst._distanceFsm = null;
             _inst._travelKm = _inst._heat = 0f;
             _inst._bossKills = 0;
@@ -54,7 +64,7 @@ namespace Apocatremors
         private void Update()
         {
             try { Tick(); }
-            catch (Exception e) { Plugin.Log.LogError("Tick: " + e); _cooldown = 30f; }
+            catch (Exception e) { Plugin.Log.LogError("Tick: " + e); _player.Cooldown = 30f; }
         }
 
         private void Tick()
@@ -71,17 +81,85 @@ namespace Apocatremors
             GameObject car; Rigidbody carRb;
             CurrentCar(out car, out carRb);
 
+            if (!Plugin.Enabled.Value) return;
             if (Plugin.Pressed(Plugin.TestKey.Value)) { TestSpawn(car, carRb); return; }
-            if (!Plugin.Enabled.Value || car == null || carRb == null) return;
             if (Plugin.RespectPeacefulMode.Value && _peaceful != null && _peaceful.enabled) return;
+            if (_heat <= 0f) return;                                        // at the start: no clock runs
 
-            float kmh = carRb.velocity.magnitude * 3.6f;
-            if (kmh < Plugin.MinSpeedKmh.Value || _heat <= 0f) return;     // standing still or at the start: the clock stops
-            if (_cooldown < 0f) ResetCooldown();
-            _cooldown -= dt * (Plugin.HeatScalesCooldown.Value ? _heat : 1f);
-            if (_cooldown > 0f) return;
+            bool patrol = PatrolLoaded();
+            if (car != null && carRb != null)
+                RunClock(_player, car, carRb, dt, patrol ? Plugin.PlayerCooldownMultiplier.Value : 1f, patrol ? Plugin.PlayerSkipChance.Value : 0f, false);
+            if (patrol && Plugin.AiCars.Value) AiTick(dt, car);
+        }
 
-            Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), null, false, kmh);
+        // The clock only runs while the car drives at least MinSpeedKmh; when it runs out, roll (or skip) and restart it.
+        private void RunClock(Clock clock, GameObject car, Rigidbody rb, float dt, float mult, float skipChance, bool ai)
+        {
+            float kmh = rb.velocity.magnitude * 3.6f;
+            if (kmh < Plugin.MinSpeedKmh.Value) return;
+            clock.Mult = Mathf.Max(0.1f, mult);
+            if (clock.Cooldown < 0f) ResetCooldown(clock);
+            clock.Cooldown -= dt * (Plugin.HeatScalesCooldown.Value ? _heat : 1f);
+            if (clock.Cooldown > 0f) return;
+            if (skipChance > 0f && UnityEngine.Random.value * 100f < skipChance)
+            {
+                Plugin.Verbose(clock.Label + ": ambush roll skipped (" + skipChance.ToString("0") + " % skip chance)");
+                ResetCooldown(clock);
+                return;
+            }
+            Ambush(car.transform.position, Flat(rb.velocity, car.transform.forward), null, false, kmh, clock, ai);
+        }
+
+        private static bool PatrolLoaded()
+        {
+            if (_patrolChecked) return _markerType != null;
+            _patrolChecked = true;
+            try
+            {
+                BepInEx.PluginInfo pi;
+                if (BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(PatrolGuid, out pi) && pi.Instance != null)
+                {
+                    _markerType = pi.Instance.GetType().Assembly.GetType("Apocapatrol.PatrolMarker");
+                    Plugin.Log.LogInfo("Apocapatrol " + pi.Metadata.Version + " found" + (_markerType == null ? " but no PatrolMarker type - AI cars ignored" : "; AI cars " + (Plugin.AiCars.Value ? "rouse ambushes" : "ignored (AiCars off)")));
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("Apocapatrol check: " + e.Message); }
+            return _markerType != null;
+        }
+
+        // Apocapatrol's cars: every 5 s collect the cars carrying a PatrolMarker; each keeps its own clock while it moves near the player.
+        private void AiTick(float dt, GameObject playerCar)
+        {
+            if (Time.unscaledTime >= _nextAiScan)
+            {
+                _nextAiScan = Time.unscaledTime + 5f;
+                foreach (var a in _aiCars.Values) a.Seen = false;
+                foreach (var m in FindObjectsOfType(_markerType))
+                {
+                    var comp = m as Component;
+                    if (comp == null) continue;
+                    var go = comp.gameObject;
+                    int id = go.GetInstanceID();
+                    AiCar a;
+                    if (!_aiCars.TryGetValue(id, out a))
+                    {
+                        a = new AiCar { Go = go, Rb = go.GetComponent<Rigidbody>() ?? go.GetComponentInParent<Rigidbody>(), Clock = new Clock { Label = "AI car " + go.name } };
+                        _aiCars[id] = a;
+                    }
+                    a.Seen = true;
+                }
+                foreach (var k in _aiCars.Where(kv => !kv.Value.Seen || kv.Value.Go == null).Select(kv => kv.Key).ToList()) _aiCars.Remove(k);
+            }
+            if (_aiCars.Count == 0) return;
+            Vector3 p;
+            if (!PlayerPos(out p)) return;
+            float maxD = Plugin.AiMaxPlayerDistance.Value;
+            foreach (var a in _aiCars.Values)
+            {
+                if (a.Go == null || a.Rb == null || a.Go == playerCar) continue;      // a car the player took over is the player's car
+                if ((a.Go.transform.position - p).sqrMagnitude > maxD * maxD) continue;
+                RunClock(a.Clock, a.Go, a.Rb, dt, Plugin.AiCooldownMultiplier.Value, Plugin.AiSkipChance.Value, true);
+            }
         }
 
         private bool InGame()
@@ -176,30 +254,32 @@ namespace Apocatremors
             p = Vector3.zero; return false;
         }
 
-        private void ResetCooldown()
+        private void ResetCooldown(Clock clock)
         {
             float a = Mathf.Max(1f, Plugin.CooldownMinSeconds.Value), b = Mathf.Max(a, Plugin.CooldownMaxSeconds.Value);
-            _cooldown = UnityEngine.Random.Range(a, b);
-            _retries = 0;
-            Plugin.Verbose("Next ambush roll in " + _cooldown.ToString("0") + " s at heat 100 % (heat now " + (_heat * 100f).ToString("0") + " %)");
+            clock.Cooldown = UnityEngine.Random.Range(a, b) * clock.Mult;
+            clock.Retries = 0;
+            Plugin.Verbose(clock.Label + ": next ambush roll in " + clock.Cooldown.ToString("0") + " s at heat 100 % (heat now " + (_heat * 100f).ToString("0") + " %"
+                + (clock.Mult != 1f ? ", clock x" + clock.Mult.ToString("0.##") : "") + ")");
         }
 
         private void TestSpawn(GameObject car, Rigidbody carRb)
         {
             var forced = Catalog.Find(Plugin.TestType.Value);
-            if (car != null && carRb != null) { Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), forced, true, carRb.velocity.magnitude * 3.6f); return; }
+            if (car != null && carRb != null) { Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), forced, true, carRb.velocity.magnitude * 3.6f, null, false); return; }
             var cam = Camera.main;
             if (cam == null) return;
             Vector3 origin = cam.transform.position;
             RaycastHit h;
             if (Physics.Raycast(origin, Vector3.down, out h, 10f, ~0, QueryTriggerInteraction.Ignore)) origin = h.point;
-            Ambush(origin, Flat(Vector3.zero, cam.transform.forward), forced, true, 0f);
+            Ambush(origin, Flat(Vector3.zero, cam.transform.forward), forced, true, 0f, null, false);
         }
 
-        private void Ambush(Vector3 origin, Vector3 dir, Creature forced, bool test, float kmh)
+        // clock = the source's clock (null for the test key); ai = roused by an Apocapatrol car
+        private void Ambush(Vector3 origin, Vector3 dir, Creature forced, bool test, float kmh, Clock clock, bool ai)
         {
             _alive.RemoveAll(g => g == null);
-            if (!test && _alive.Count + _emerging.Count >= Plugin.MaxAlive.Value) { _cooldown = 20f; return; }
+            if (!test && _alive.Count + _emerging.Count >= Plugin.MaxAlive.Value) { clock.Cooldown = 20f; return; }
             float km = _travelKm;
             int bk = _bossKills;
             Func<Creature, bool> allowed = x => x.Allowed(kmh, km, bk);
@@ -211,15 +291,15 @@ namespace Apocatremors
                 if (c == null && test) c = Catalog.Creatures.Where(x => x.Chance.Value > 0f).OrderBy(x => UnityEngine.Random.value).FirstOrDefault()
                                             ?? Catalog.Creatures.FirstOrDefault(x => x.Group == Catalog.Mutants);
             }
-            if (c == null) { Plugin.Verbose("Ambush roll: nothing"); ResetCooldown(); return; }
+            if (c == null) { Plugin.Verbose((clock != null ? clock.Label : "Test") + ": ambush roll: nothing"); if (clock != null) ResetCooldown(clock); return; }
 
             float r = Mathf.Max(Plugin.ClearRadius.Value, c.Radius + 0.5f);
             Vector3 ground;
             if (!FindSpot(origin, dir, r, c, out ground))
             {
                 Plugin.Verbose("No spawn spot for " + c.Key);
-                if (!test && ++_retries < 5) _cooldown = 3f;                // try again a little later
-                else if (!test) ResetCooldown();
+                if (!test && ++clock.Retries < 5) clock.Cooldown = 3f;      // try again a little later
+                else if (!test) ResetCooldown(clock);
                 return;
             }
 
@@ -237,9 +317,10 @@ namespace Apocatremors
                     if (ValidSpot(ground + off, origin.y, r, out g2) && spots.All(s => (s - g2).sqrMagnitude > 4f * r * r)) { spots.Add(g2); break; }
                 }
 
-            Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + ", heat " + (_heat * 100f).ToString("0") + " %");
-            Notice.Show((Plugin.NotificationText.Value ?? "")
-                .Replace("{plural}", c.Plural.Value).Replace("{name}", c.Name.Value).Replace("{count}", spots.Count.ToString()));
+            Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + ", heat " + (_heat * 100f).ToString("0") + " %" + (clock != null ? " (" + clock.Label + ")" : " (test)"));
+            string text = ai ? Plugin.AiNotificationText.Value : Plugin.NotificationText.Value;
+            if (!string.IsNullOrEmpty(text))
+                Notice.Show(text.Replace("{plural}", c.Plural.Value).Replace("{name}", c.Name.Value).Replace("{count}", spots.Count.ToString()));
             float delay = 0f;
             foreach (var s in spots)
             {
@@ -247,7 +328,7 @@ namespace Apocatremors
                 _emerging.Add(new Emerge(this, c, s, Quaternion.LookRotation(face), delay));
                 delay += UnityEngine.Random.Range(0.3f, 0.9f);
             }
-            if (!test) ResetCooldown();
+            if (!test) ResetCooldown(clock);
         }
 
         private bool FindSpot(Vector3 origin, Vector3 dir, float r, Creature c, out Vector3 ground)

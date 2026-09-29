@@ -25,6 +25,12 @@ The farther you get from the starting area, the more often they come and the big
   notice, red (`NotificationColor`). Text template `NotificationText` with `{plural}`, `{name}`, `{count}`; off with `ShowNotification`.
 - **Boss kills** = the game's global `Boss_*` flags (the boss list on the player sheet).
 - Respects the game's peaceful mode.
+- **Apocapatrol** (NPC-driven cars, `[Apocapatrol]`, only while that plugin is loaded). Its cars bring enemies of their own, so your
+  ambush clock runs `PlayerCooldownMultiplier` times slower (default 1.5) and `PlayerSkipChance` % of your rolls (default 25) spawn nothing.
+  With `AiCars` (default off) the AI cars rouse ambushes too: each moving AI car within `AiMaxPlayerDistance` of you has its own clock
+  (`AiCooldownMultiplier` × the normal cooldown, default 2) and `AiSkipChance` % of its rolls (default 50) spawn nothing; creatures emerge
+  ahead of that car under the same rules (heat, creature limits, `MaxAlive` shared with your own ambushes) and `AiNotificationText`
+  ("The roar of an engine nearby has roused …") is shown. A car you took over counts as yours.
 
 ## Per-creature settings
 One section per enemy prefab the game has (traders, friendly-until-attacked NPCs and the `_BACKUP` / `_Sanity` variants are left out),
@@ -59,11 +65,11 @@ Bosses (if enabled): one at a time, 90–130 m, 30 km/h, 50–70 km and 3–7 bo
 
 ## Config
 `BepInEx\config\com.denis.apocalypter.apocatremors.cfg` (also editable in game through the Apocasetter Mods menu), in this order:
-`[General]` (on/off, notification text/colour/duration), `[Trigger]`, `[Heat]`, `[Placement]`, `[Emerge]`, `[Debug]`, then one
+`[General]` (on/off, notification text/colour/duration), `[Trigger]`, `[Heat]`, `[Apocapatrol]`, `[Placement]`, `[Emerge]`, `[Debug]`, then one
 section per creature: `[Mutants: …]`, `[Humans: …]`, `[Bosses: …]`, `[Other: …]`. Settings from older versions are removed from the file automatically.
 
 `[Debug]`: `TestKey` (default None, e.g. F8) spawns one ambush immediately — ahead of the car, or ahead of the camera on foot —
-ignoring speed, cooldown, heat and all creature limits; `TestType` forces one prefab (e.g. `Burrower`); `Exclude` lists prefab names
+ignoring speed, cooldown, heat and all creature limits (but not `Enabled`); `TestType` forces one prefab (e.g. `Burrower`); `Exclude` lists prefab names
 never offered; `VerboseLog` logs every ambush roll and spawn decision.
 
 ## Install

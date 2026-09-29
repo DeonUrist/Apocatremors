@@ -20,7 +20,7 @@ namespace Apocatremors
     {
         public const string GUID = "com.denis.apocalypter.apocatremors";
         public const string NAME = "Apocatremors";
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "1.1.0";
 
         internal static ManualLogSource Log;
         internal static ConfigFile Cfg;
@@ -33,6 +33,9 @@ namespace Apocatremors
         internal static ConfigEntry<bool> RespectPeacefulMode;
         internal static ConfigEntry<float> HeatPer10Km, MaxHeat;
         internal static ConfigEntry<bool> HeatScalesGroup, HeatScalesCooldown;
+        internal static ConfigEntry<bool> AiCars;
+        internal static ConfigEntry<float> AiCooldownMultiplier, AiSkipChance, AiMaxPlayerDistance, PlayerCooldownMultiplier, PlayerSkipChance;
+        internal static ConfigEntry<string> AiNotificationText;
         internal static ConfigEntry<float> SpreadAngle, MaxSlope, MaxHeightDiff, FlatTolerance, StructureBuffer, ClearRadius;
         internal static ConfigEntry<float> EffectLeadSeconds, RiseSeconds, DespawnDistance;
         internal static ConfigEntry<bool> RegisterWithGame, SurfaceBurst;
@@ -91,6 +94,24 @@ namespace Apocatremors
             HeatScalesCooldown = Config.Bind("Heat", "HeatScalesCooldown", true,
                 "The ambush clock runs heat times as fast (50 % heat = twice the wait, 200 % = half)");
 
+            // Everything in [Apocapatrol] only takes effect while the Apocapatrol plugin is loaded.
+            AiCars = Config.Bind("Apocapatrol", "AiCars", false,
+                "Apocapatrol's NPC-driven cars rouse ambushes too: creatures emerge ahead of a moving AI car, with the same rules as for you " +
+                "(heat, creature limits, MaxAlive). Only while Apocapatrol is loaded");
+            AiCooldownMultiplier = Config.Bind("Apocapatrol", "AiCooldownMultiplier", 2f, new ConfigDescription(
+                "Each AI car has its own ambush clock, this many times longer than CooldownMin/MaxSeconds", new AcceptableValueRange<float>(0.1f, 20f)));
+            AiSkipChance = Config.Bind("Apocapatrol", "AiSkipChance", 50f, new ConfigDescription(
+                "Percentage of AI-car ambush rolls that spawn nothing", new AcceptableValueRange<float>(0f, 100f)));
+            AiMaxPlayerDistance = Config.Bind("Apocapatrol", "AiMaxPlayerDistance", 250f, new ConfigDescription(
+                "AI cars farther than this from you get no ambushes (m)", new AcceptableValueRange<float>(20f, 2000f)));
+            AiNotificationText = Config.Bind("Apocapatrol", "AiNotificationText", "The roar of an engine nearby has roused {plural}.",
+                "Message when an AI car rouses an ambush ({plural}, {name}, {count} as above). Empty = no message");
+            PlayerCooldownMultiplier = Config.Bind("Apocapatrol", "PlayerCooldownMultiplier", 1.5f, new ConfigDescription(
+                "While Apocapatrol is loaded, your own ambush clock is this many times longer (its cars bring enemies of their own)",
+                new AcceptableValueRange<float>(0.1f, 20f)));
+            PlayerSkipChance = Config.Bind("Apocapatrol", "PlayerSkipChance", 25f, new ConfigDescription(
+                "While Apocapatrol is loaded, percentage of your ambush rolls that spawn nothing", new AcceptableValueRange<float>(0f, 100f)));
+
             SpreadAngle = Config.Bind("Placement", "SpreadAngle", 35f, new ConfigDescription(
                 "Max angle left/right of the driving direction (degrees)", new AcceptableValueRange<float>(0f, 180f)));
             MaxSlope = Config.Bind("Placement", "MaxSlope", 25f, new ConfigDescription(
@@ -115,7 +136,7 @@ namespace Apocatremors
                 "Remove spawned creatures farther than this from the player (m, 0 = never)", new AcceptableValueRange<float>(0f, 2000f)));
 
             TestKey = Config.Bind("Debug", "TestKey", Key.None,
-                "Spawn one ambush right now, ignoring speed, cooldown, heat and all creature limits (e.g. F8). None = off");
+                "Spawn one ambush right now, ignoring speed, cooldown, heat and all creature limits (e.g. F8); needs Enabled. None = off");
             TestType = Config.Bind("Debug", "TestType", "", "Prefab name the TestKey spawns (e.g. Burrower). Empty = pick by the creatures' chances");
             Exclude = Config.Bind("Debug", "Exclude", "",
                 "Comma-separated prefab names never offered as ambush creatures (traders and friendly NPCs are always left out)");
