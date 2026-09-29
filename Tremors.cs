@@ -6,18 +6,16 @@ using UnityEngine;
 
 namespace Apocatremors
 {
-    // Per-frame logic: driving detection, cooldown, ambush rolls, spawn-spot search, the emerge animation and cleanup.
+    // Per-frame logic: driving detection, heat, cooldown, ambush rolls, spawn-spot search, the emerge animation and cleanup.
     internal class Tremors : MonoBehaviour
     {
         private static Tremors _inst;
 
-        // game refs
         private PlayMakerFSM _menu, _peaceful, _saveLoad;
         private readonly List<PlayMakerFSM> _drive = new List<PlayMakerFSM>();
         private float _nextRefScan, _nextDriveScan, _nextSlowTick;
 
-        // ambush state
-        private float _cooldown = -1f;       // in "heat 100 %" seconds
+        private float _cooldown = -1f;       // seconds at heat 100 %
         private float _travelKm, _heat;
         private int _bossKills;
         private PlayMakerFSM _distanceFsm;
@@ -25,7 +23,7 @@ namespace Apocatremors
         private readonly List<GameObject> _alive = new List<GameObject>();
         private readonly List<Emerge> _emerging = new List<Emerge>();
 
-        // structures (camps, wrecks, caves, buildings) = children of MapMagic/Tile */Objects that carry FSMs
+        // structures (camps, wrecks, caves, buildings) = children of the MapMagic tiles' object folders that carry FSMs
         private class Poi { public Transform T; public Vector3 LocalCenter; public Vector3 Size; }
         private readonly Dictionary<int, Poi> _poiInfo = new Dictionary<int, Poi>();   // null value = not a structure
         private readonly List<Poi> _pois = new List<Poi>();
@@ -45,10 +43,11 @@ namespace Apocatremors
             _inst._poiInfo.Clear();
             _inst._pois.Clear();
             _inst._cooldown = -1f;
+            _inst._retries = 0;
             _inst._distanceFsm = null;
             _inst._travelKm = _inst._heat = 0f;
+            _inst._bossKills = 0;
             Notice.Reset();
-            _inst._retries = 0;
             Catalog.Invalidate();
         }
 
@@ -77,16 +76,13 @@ namespace Apocatremors
             if (Plugin.RespectPeacefulMode.Value && _peaceful != null && _peaceful.enabled) return;
 
             float kmh = carRb.velocity.magnitude * 3.6f;
-            if (kmh < Plugin.MinSpeedKmh.Value) return;     // stationary / crawling: the clock stops
-            if (_heat <= 0f) return;                         // at the start area: no ambushes
+            if (kmh < Plugin.MinSpeedKmh.Value || _heat <= 0f) return;     // standing still or at the start: the clock stops
             if (_cooldown < 0f) ResetCooldown();
             _cooldown -= dt * (Plugin.HeatScalesCooldown.Value ? _heat : 1f);
             if (_cooldown > 0f) return;
 
             Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), null, false, kmh);
         }
-
-        // ------------------------------------------------------------------ game state
 
         private bool InGame()
         {
@@ -140,17 +136,12 @@ namespace Apocatremors
             for (int i = _alive.Count - 1; i >= 0; i--)
             {
                 var g = _alive[i];
-                if ((g.transform.position - p).sqrMagnitude > d * d)
-                {
-                    Plugin.Verbose("Despawn " + g.name + " (too far)");
-                    Destroy(g);
-                    _alive.RemoveAt(i);
-                }
+                if ((g.transform.position - p).sqrMagnitude > d * d) { Destroy(g); _alive.RemoveAt(i); }
             }
         }
 
-        // Heat from the game's own "Distance Travelled" (__GameManager__ [DistanceTravelled].distance = km from Starter_Area,
-        // refreshed by the game every 5 s); 0 km = 0 %, +HeatPer10Km per 10 km, capped at MaxHeat.
+        // Heat from the game's "Distance Travelled" (__GameManager__ [DistanceTravelled].distance = km from Starter_Area).
+        // Boss kills = the game's global Boss_* flags.
         private void UpdateHeat()
         {
             if (_distanceFsm == null || _distanceFsm.gameObject == null)
@@ -190,17 +181,12 @@ namespace Apocatremors
             float a = Mathf.Max(1f, Plugin.CooldownMinSeconds.Value), b = Mathf.Max(a, Plugin.CooldownMaxSeconds.Value);
             _cooldown = UnityEngine.Random.Range(a, b);
             _retries = 0;
-            Plugin.Verbose("Next ambush roll in " + _cooldown.ToString("0") + " s of driving at heat 100 % (now " +
-                (_heat * 100f).ToString("0") + " % at " + _travelKm.ToString("0.0") + " km)");
+            Plugin.Verbose("Next ambush roll in " + _cooldown.ToString("0") + " s at heat 100 % (heat now " + (_heat * 100f).ToString("0") + " %)");
         }
-
-        // ------------------------------------------------------------------ ambush
 
         private void TestSpawn(GameObject car, Rigidbody carRb)
         {
             var forced = Catalog.Find(Plugin.TestType.Value);
-            if (!string.IsNullOrEmpty(Plugin.TestType.Value) && forced == null)
-                Plugin.Log.LogWarning("TestType '" + Plugin.TestType.Value + "' is not in the creature catalog");
             if (car != null && carRb != null) { Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), forced, true, carRb.velocity.magnitude * 3.6f); return; }
             var cam = Camera.main;
             if (cam == null) return;
@@ -213,15 +199,11 @@ namespace Apocatremors
         private void Ambush(Vector3 origin, Vector3 dir, Creature forced, bool test, float kmh)
         {
             _alive.RemoveAll(g => g == null);
-            if (!test && _alive.Count + _emerging.Count >= Plugin.MaxAlive.Value)
-            {
-                Plugin.Verbose("Ambush skipped: " + _alive.Count + " creatures still alive");
-                _cooldown = 20f; return;
-            }
+            if (!test && _alive.Count + _emerging.Count >= Plugin.MaxAlive.Value) { _cooldown = 20f; return; }
             float km = _travelKm;
             int bk = _bossKills;
             Func<Creature, bool> allowed = x => x.Allowed(kmh, km, bk);
-            if (test) allowed = x => x.Chance.Value > 0f;    // the test key ignores speed and travel limits
+            if (test) allowed = x => x.Chance.Value > 0f;
             var c = forced;
             if (c == null)
             {
@@ -229,19 +211,15 @@ namespace Apocatremors
                 if (c == null && test) c = Catalog.Creatures.Where(x => x.Chance.Value > 0f).OrderBy(x => UnityEngine.Random.value).FirstOrDefault()
                                             ?? Catalog.Creatures.FirstOrDefault();
             }
-            if (c == null)
-            {
-                Plugin.Verbose("Ambush roll: nothing (" + Catalog.TotalChance(allowed).ToString("0.#") + " % total for " +
-                    kmh.ToString("0") + " km/h at " + km.ToString("0.0") + " km, " + bk + " bosses killed)");
-                ResetCooldown(); return;
-            }
+            if (c == null) { Plugin.Verbose("Ambush roll: nothing"); ResetCooldown(); return; }
 
             float r = Mathf.Max(Plugin.ClearRadius.Value, c.Radius + 0.5f);
-            Vector3 ground; string why = "";
-            if (!FindSpot(origin, dir, r, c, out ground, ref why))
+            Vector3 ground;
+            if (!FindSpot(origin, dir, r, c, out ground))
             {
-                if (!test && ++_retries < 5) { _cooldown = 3f; Plugin.Verbose("No spot for " + c.Key + " (" + why + "), retry " + _retries); }
-                else { Plugin.Log.LogInfo("No valid spawn spot for " + c.Key + " (" + why + ")"); if (!test) ResetCooldown(); }
+                Plugin.Verbose("No spawn spot for " + c.Key);
+                if (!test && ++_retries < 5) _cooldown = 3f;                // try again a little later
+                else if (!test) ResetCooldown();
                 return;
             }
 
@@ -255,12 +233,11 @@ namespace Apocatremors
                 for (int k = 0; k < 8; k++)
                 {
                     var off = Quaternion.Euler(0f, UnityEngine.Random.Range(0f, 360f), 0f) * Vector3.forward * UnityEngine.Random.Range(2f * r + 1f, 2f * r + 6f);
-                    Vector3 g2; string w2 = "";
-                    if (ValidSpot(ground + off, origin.y, r, out g2, ref w2) && spots.All(s => (s - g2).sqrMagnitude > 4f * r * r)) { spots.Add(g2); break; }
+                    Vector3 g2;
+                    if (ValidSpot(ground + off, origin.y, r, out g2) && spots.All(s => (s - g2).sqrMagnitude > 4f * r * r)) { spots.Add(g2); break; }
                 }
 
-            Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + " at " + Vector3.Distance(origin, ground).ToString("0") + " m, heat " +
-                (_heat * 100f).ToString("0") + " % (" + _travelKm.ToString("0.0") + " km, " + _bossKills + " bosses killed)" + (test ? " (test)" : ""));
+            Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + ", heat " + (_heat * 100f).ToString("0") + " %");
             Notice.Show((Plugin.NotificationText.Value ?? "")
                 .Replace("{plural}", c.Plural.Value).Replace("{name}", c.Name.Value).Replace("{count}", spots.Count.ToString()));
             float delay = 0f;
@@ -273,66 +250,53 @@ namespace Apocatremors
             if (!test) ResetCooldown();
         }
 
-        private bool FindSpot(Vector3 origin, Vector3 dir, float r, Creature c, out Vector3 ground, ref string why)
+        private bool FindSpot(Vector3 origin, Vector3 dir, float r, Creature c, out Vector3 ground)
         {
             float dMin = Mathf.Max(5f, c.DistanceMin.Value), dMax = Mathf.Max(dMin, c.DistanceMax.Value);
             float spread = Mathf.Clamp(Plugin.SpreadAngle.Value, 0f, 180f);
-            var reasons = new Dictionary<string, int>();
             for (int i = 0; i < MaxTries; i++)
             {
                 var d = Quaternion.Euler(0f, UnityEngine.Random.Range(-spread, spread), 0f) * dir;
-                var p = origin + d * UnityEngine.Random.Range(dMin, dMax);
-                string w = "";
-                if (ValidSpot(p, origin.y, r, out ground, ref w)) return true;
-                int cnt; reasons.TryGetValue(w, out cnt); reasons[w] = cnt + 1;
+                if (ValidSpot(origin + d * UnityEngine.Random.Range(dMin, dMax), origin.y, r, out ground)) return true;
             }
             ground = Vector3.zero;
-            why = string.Join(", ", reasons.Select(kv => kv.Key + " x" + kv.Value).ToArray());
             return false;
         }
 
         // A spot is good when, looking straight down, the first thing hit is open terrain: not a roof, rock, car or prop,
         // not steep, level with the car, flat around, away from structures and with room for the creature.
-        private bool ValidSpot(Vector3 p, float refY, float r, out Vector3 ground, ref string why)
+        private bool ValidSpot(Vector3 p, float refY, float r, out Vector3 ground)
         {
             ground = p;
             RaycastHit hit;
-            string blocker;
-            if (!GroundHit(p, refY, out hit, out blocker)) { why = blocker; return false; }
+            if (!GroundHit(p, refY, out hit)) return false;
             ground = hit.point;
-            if (Vector3.Angle(hit.normal, Vector3.up) > Plugin.MaxSlope.Value) { why = "steep"; return false; }
-            if (Mathf.Abs(hit.point.y - refY) > Plugin.MaxHeightDiff.Value) { why = "height"; return false; }
+            if (Vector3.Angle(hit.normal, Vector3.up) > Plugin.MaxSlope.Value) return false;
+            if (Mathf.Abs(hit.point.y - refY) > Plugin.MaxHeightDiff.Value) return false;
 
-            float tol = Plugin.FlatTolerance.Value;
             for (int k = 0; k < 4; k++)
             {
                 var q = hit.point + Quaternion.Euler(0f, k * 90f + 45f, 0f) * Vector3.forward * (r + 0.5f);
-                RaycastHit h2; string b2;
-                if (!GroundHit(q, refY, out h2, out b2)) { why = "edge " + b2; return false; }
-                if (Mathf.Abs(h2.point.y - hit.point.y) > tol) { why = "uneven"; return false; }
+                RaycastHit h2;
+                if (!GroundHit(q, refY, out h2) || Mathf.Abs(h2.point.y - hit.point.y) > Plugin.FlatTolerance.Value) return false;
             }
-
-            if (NearStructure(hit.point)) { why = "structure"; return false; }
+            if (NearStructure(hit.point)) return false;
 
             var a = hit.point + Vector3.up * (r + 0.3f);
-            var b = a + Vector3.up * 2f;
-            foreach (var col in Physics.OverlapCapsule(a, b, r, ~0, QueryTriggerInteraction.Ignore))
-                if (!(col is TerrainCollider)) { why = "crowded"; return false; }
+            foreach (var col in Physics.OverlapCapsule(a, a + Vector3.up * 2f, r, ~0, QueryTriggerInteraction.Ignore))
+                if (!(col is TerrainCollider)) return false;
             return true;
         }
 
-        private static bool GroundHit(Vector3 p, float refY, out RaycastHit hit, out string blocker)
+        // true when the first thing straight below p is terrain
+        private static bool GroundHit(Vector3 p, float refY, out RaycastHit hit)
         {
-            var from = new Vector3(p.x, refY + 200f, p.z);
-            var hits = Physics.RaycastAll(from, Vector3.down, 500f, ~0, QueryTriggerInteraction.Ignore);
             hit = default(RaycastHit);
-            blocker = "no ground";
+            var hits = Physics.RaycastAll(new Vector3(p.x, refY + 200f, p.z), Vector3.down, 500f, ~0, QueryTriggerInteraction.Ignore);
             if (hits == null || hits.Length == 0) return false;
             float best = float.MaxValue;
             foreach (var h in hits) if (h.distance < best) { best = h.distance; hit = h; }
-            if (hit.collider is TerrainCollider) return true;
-            blocker = "covered";
-            return false;
+            return hit.collider is TerrainCollider;
         }
 
         private bool NearStructure(Vector3 p)
@@ -386,8 +350,6 @@ namespace Apocatremors
             if (poi != null) _pois.Add(poi);
         }
 
-        // ------------------------------------------------------------------ emerge
-
         private class Emerge
         {
             private readonly Tremors _owner;
@@ -409,7 +371,7 @@ namespace Apocatremors
                 _owner = owner; _c = c; _ground = ground; _rot = rot; _wait = delay;
             }
 
-            // returns true when finished (or failed)
+            // true when finished (or failed)
             public bool Step(float dt)
             {
                 try { return DoStep(dt); }
@@ -451,7 +413,6 @@ namespace Apocatremors
                 Release();
                 if (Plugin.RegisterWithGame.Value) Register(_go);
                 _owner._alive.Add(_go);
-                Plugin.Verbose(_go.name + " emerged");
                 return true;
             }
 
@@ -542,8 +503,6 @@ namespace Apocatremors
             foreach (var p in reg.GetComponents<PlayMakerArrayListProxy>())
                 if ((p.referenceName ?? "").ToLowerInvariant().Contains("item")) { p.arrayList.Add(go); return; }
         }
-
-        // ------------------------------------------------------------------ helpers
 
         private static Vector3 Flat(Vector3 v, Vector3 fallback)
         {

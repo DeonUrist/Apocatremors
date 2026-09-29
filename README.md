@@ -24,10 +24,10 @@ The farther you get from the starting area, the more often they come and the big
 - **Notification.** "Your engine's roar has roused Big Scorpions nearby." top left, in the font and size of the game's new-codex-entry
   notice, red (`NotificationColor`). Text template `NotificationText` with `{plural}`, `{name}`, `{count}`; off with `ShowNotification`.
 - **Boss kills** = the game's global `Boss_*` flags (the boss list on the player sheet).
-- Respects the game's peaceful mode. Shows up in the Apocasetter Mods menu (optional, no dependency).
+- Respects the game's peaceful mode.
 
 ## Per-creature settings — `[Creature: <prefab>]`
-Created on the first game start for every enemy prefab the game has (traders and the `_BACKUP` / `_Sanity` variants are left out):
+Created on the first game start for every enemy prefab the game has (traders, friendly-until-attacked NPCs and the `_BACKUP` / `_Sanity` variants are left out):
 `Chance`, `GroupMin`/`GroupMax` (at 100 % heat), `DistanceMin`/`DistanceMax` (m from the car), `MinCarSpeedKmh`,
 `MinTravelKm`/`MaxTravelKm` (Distance Travelled window, max 0 = none), `MinBossKills` (0–7: how many of the game's 7 bosses must be dead),
 `Name`/`Plural` (for the notification). A creature is only picked when all of its limits are met.
@@ -47,10 +47,17 @@ Defaults scale with toughness (prefab health) — tougher creatures come later, 
 \* Chance only for creatures in the game's own wild mutant/carnivore spawn lists; the rest start at 0 (enable them by giving them a Chance).
 The Burrower is the exception: 25 %, from 0 km, groups of 1–2.
 
-## Test key
-`TestKey` (default F8) spawns one ambush immediately (driving: ahead of the car; on foot: ahead of the camera), ignoring speed, heat and
-travel limits. Set `TestType` to a prefab name (e.g. `Burrower`, `Nightwalker`) to test one creature. `VerboseLog = true` logs every roll,
-the heat and why spots were rejected.
+## Config
+`BepInEx\config\com.denis.apocalypter.apocatremors.cfg` (also editable in game through the Apocasetter Mods menu), in this order:
+`[General]` (on/off, notification text/colour/duration), `[Trigger]`, `[Heat]`, `[Placement]`, `[Emerge]`, `[Debug]`, then one
+`[Creature: <prefab>]` section per creature. Settings from older versions are removed from the file automatically.
+
+`[Debug]`: `TestKey` (default None, e.g. F8) spawns one ambush immediately — ahead of the car, or ahead of the camera on foot —
+ignoring speed, cooldown, heat and all creature limits; `TestType` forces one prefab (e.g. `Burrower`); `Exclude` lists prefab names
+never offered; `VerboseLog` logs every ambush roll and spawn decision.
+
+## Install
+Copy `Apocatremors.dll` into `BepInEx\plugins\` (BepInEx 5). Apocasetter is optional.
 
 ## Build
 `MANAGED=<game>/Apocalypter_Data/Managed BEPCORE=<game>/BepInEx/core sh build.sh` (mcs), or `dotnet build` with the csproj

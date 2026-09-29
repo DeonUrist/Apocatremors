@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Text;
 using BepInEx.Configuration;
 using HutongGames.PlayMaker;
-using HutongGames.PlayMaker.Actions;
 using UnityEngine;
 
 namespace Apocatremors
@@ -83,7 +81,7 @@ namespace Apocatremors
                 if (go.name == "Burrower_Effect" && names.Contains("DestroySelf")) { Effect = go; continue; }
                 if (!names.Contains("Health") || !(names.Contains("Attack") || names.Contains("Detection"))) continue;
                 if (go.GetComponent<Rigidbody>() == null) continue;
-                if (names.Contains("PlayerIsEnemy")) continue;                   // traders (Merchant, Mechanic, ...) - friendly until attacked
+                if (names.Contains("PlayerIsEnemy")) continue;                   // traders and Coyotes NPCs: friendly until attacked
                 if (Suffixes.Any(s => go.name.EndsWith(s, StringComparison.OrdinalIgnoreCase))) continue;
                 if (exclude.Contains(go.name)) continue;
                 if (found.Any(c => c.Key == go.name)) continue;
@@ -101,23 +99,14 @@ namespace Apocatremors
             found.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase));
 
             BindAll(found);
-
-            var sb = new StringBuilder();
-            sb.Append("Catalog: ").Append(Creatures.Count).Append(" creatures, effect=").Append(Effect != null ? Effect.name : "MISSING")
-              .Append(", game lists=").Append(listed.Count).Append('\n');
-            foreach (var c in Creatures)
-                sb.Append("  ").Append(c.Key).Append(" hp=").Append(c.Health.ToString("0.#")).Append(" chance=").Append(c.Chance.Value)
-                  .Append(" dist=").Append(c.DistanceMin.Value).Append('-').Append(c.DistanceMax.Value).Append(" kmh>=").Append(c.MinCarSpeedKmh.Value)
-                  .Append(" group=").Append(c.GroupMin.Value).Append('-').Append(c.GroupMax.Value)
-                  .Append(" km>=").Append(c.MinTravelKm.Value).Append(" bosses>=").Append(c.MinBossKills.Value).Append(c.MaxTravelKm.Value > 0f ? " km<=" + c.MaxTravelKm.Value : "")
-                  .Append(c.IsBoss ? " boss" : "").Append(c.InGameLists ? " listed" : "").Append(" \"").Append(c.Plural.Value).Append('"').Append('\n');
-            Plugin.Log.LogInfo(sb.ToString().TrimEnd());
-            LogVanillaSpawners();
+            Plugin.Log.LogInfo("Creatures: " + Creatures.Count + (Effect == null ? " (sand burst effect not found)" : ""));
         }
 
         // ------------------------------------------------------------------ per-creature config
 
-        public static string Section(Creature c) { return "Creature: " + SafeKey(c.Key); }
+        public const string SectionPrefix = "Creature: ";
+
+        public static string Section(Creature c) { return SectionPrefix + SafeKey(c.Key); }
 
         // Default difficulty tiers by prefab health (Health FSM "Health"): tougher creatures need more distance travelled and
         // more bosses killed, come in smaller groups, farther away, less often, and only at higher car speed.
@@ -190,7 +179,6 @@ namespace Apocatremors
                 c.Plural = Plugin.Cfg.Bind(s, "Plural", Pluralize(name), "Plural name used in the notification ({plural})");
                 Creatures.Add(c);
             }
-            Plugin.DropOrphans(k => k.Section == "Chances");   // 0.1.0 table
             Plugin.Cfg.SaveOnConfigSet = old;
             Plugin.Cfg.Save();
         }
@@ -268,7 +256,6 @@ namespace Apocatremors
             if (l.EndsWith("s") && !l.EndsWith("ss")) return w;                      // already plural (Wasps)
             if (l.EndsWith("ss") || l.EndsWith("x") || l.EndsWith("z") || l.EndsWith("ch") || l.EndsWith("sh")) return w + "es";
             if (l.EndsWith("y") && "aeiou".IndexOf(l[l.Length - 2]) < 0) return w.Substring(0, w.Length - 1) + "ies";
-            if (l == "wolf") return w.Substring(0, w.Length - 1) + "ves";
             return w + "s";
         }
 
@@ -279,49 +266,6 @@ namespace Apocatremors
             var sb = new StringBuilder();
             foreach (char ch in s) sb.Append("=\n\t\\\"'[]".IndexOf(ch) >= 0 ? '_' : ch);
             return sb.ToString().Trim();
-        }
-
-        // Research aid: how does the game itself spawn the worm and the sanity mutants? (CreateObject params)
-        private static void LogVanillaSpawners()
-        {
-            if (!Plugin.VerboseLog.Value) return;
-            try
-            {
-                foreach (var f in Resources.FindObjectsOfTypeAll<PlayMakerFSM>())
-                {
-                    if (f == null || f.gameObject == null) continue;
-                    bool worm = f.gameObject.name == "EnemySpawn_Burrower" && !f.gameObject.scene.IsValid() && f.FsmName == "ItemSpawner";
-                    bool sanity = f.gameObject.name == "__GameManager__" && f.FsmName == "SanityMutantSpawn";
-                    if (!worm && !sanity) continue;
-                    foreach (var st in f.FsmStates)
-                    {
-                        if (st == null || !st.Name.StartsWith("spawn")) continue;
-                        var acts = st.Actions;
-                        if (acts == null || acts.Length == 0) { st.LoadActions(); acts = st.Actions; }
-                        if (acts == null) continue;
-                        foreach (var a in acts)
-                        {
-                            var co = a as CreateObject;
-                            if (co == null) continue;
-                            Plugin.Log.LogInfo(string.Format("[vanilla] {0}[{1}] {2}: CreateObject go={3} spawnPoint={4} pos={5} rot={6} parent={7}",
-                                f.gameObject.name, f.FsmName, st.Name, Describe(co.gameObject), Describe(co.spawnPoint),
-                                co.position != null ? (co.position.IsNone ? "none" : co.position.Value.ToString()) : "null",
-                                co.rotation != null ? (co.rotation.IsNone ? "none" : co.rotation.Value.ToString()) : "null",
-                                Describe(co.parent)));
-                        }
-                    }
-                    if (worm) break;
-                }
-            }
-            catch (Exception e) { Plugin.Log.LogWarning("Vanilla spawner dump failed: " + e.Message); }
-        }
-
-        private static string Describe(FsmGameObject v)
-        {
-            if (v == null) return "null";
-            if (v.IsNone) return "none";
-            string n = v.Value != null ? v.Value.name : "null";
-            return string.IsNullOrEmpty(v.Name) ? n : "{" + v.Name + "}" + n;
         }
     }
 }
