@@ -48,7 +48,7 @@ namespace Apocatremors
             Cfg = Config;
             Config.SaveOnConfigSet = false;
             BindGlobals();
-            DropOrphans(k => !k.Section.StartsWith(Catalog.SectionPrefix));   // settings from older versions; creature sections are bound later
+            DropOrphans(k => !Catalog.IsCreatureSection(k.Section));   // settings from older versions; creature sections are bound later
             new Harmony(GUID).Patch(AccessTools.Method(typeof(ConfigFile), "Save"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterSave)));
             Config.Save();
             Config.SaveOnConfigSet = true;
@@ -58,7 +58,7 @@ namespace Apocatremors
             Log.LogInfo(NAME + " " + VERSION + " loaded");
         }
 
-        // Bind order = order in the Apocasetter menu and (via AfterSave) in the file; creature sections follow after [Debug].
+        // Bind order = order in the Apocasetter menu and (via AfterSave) in the file; [Mutants: …] and [Humans: …] follow after [Debug].
         private void BindGlobals()
         {
             Config.Bind("General", "Apocasetter", true, "Show this mod in the Apocasetter Mods menu");

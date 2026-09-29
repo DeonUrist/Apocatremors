@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using BepInEx.Configuration;
 using HutongGames.PlayMaker;
 using UnityEngine;
@@ -12,7 +14,7 @@ namespace Apocatremors
     {
         public string Key;              // prefab name
         public GameObject Prefab;
-        public bool IsBoss, InGameLists;
+        public bool IsBoss, InGameLists, IsHuman;
         public float Radius = 0.5f;     // from the prefab's capsule colliders
         public float Health;            // prefab Health FSM "Health" (difficulty proxy for the defaults)
 
@@ -40,6 +42,12 @@ namespace Apocatremors
         public static bool Built;
 
         private static readonly string[] Suffixes = { "_BACKUP", "_Sanity", "_Dead", "_cooked", "_Effect" };
+
+        // Humans are the creatures whose codex entry is in the game's Scrapyard or Coyotes pages; the name list is only a fallback
+        // for prefabs whose codex entry can't be read.
+        private static readonly string[] HumanCodexPages = { "scrapyard", "coyotes" };
+        private static readonly string[] FallbackHumans = { "Boltjaw", "Duke_Ironjaw", "Lugnut", "Professor", "Scraffa", "Scrud", "Spanna", "Sprokka", "Teacher" };
+        private static readonly Regex CodexVar = new Regex(@"^([a-z]+)_\d+$");
 
         public static void Invalidate() { Built = false; }
 
@@ -86,6 +94,8 @@ namespace Apocatremors
                 if (exclude.Contains(go.name)) continue;
                 if (found.Any(c => c.Key == go.name)) continue;
                 var c2 = new Creature { Key = go.name, Prefab = go, IsBoss = names.Contains("BossUI"), InGameLists = listed.Contains(go.name) };
+                string page = CodexPage(kv.Value);
+                c2.IsHuman = page != null ? HumanCodexPages.Contains(page) : FallbackHumans.Contains(go.name);
                 foreach (var cap in go.GetComponents<CapsuleCollider>())
                     if (!cap.isTrigger) c2.Radius = Mathf.Max(c2.Radius, cap.radius * MaxAbs(go.transform.localScale));
                 foreach (var f in kv.Value)
@@ -96,17 +106,52 @@ namespace Apocatremors
                     }
                 found.Add(c2);
             }
-            found.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase));
+            found.Sort((a, b) => a.IsHuman != b.IsHuman ? (a.IsHuman ? 1 : -1) : string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase));
 
             BindAll(found);
-            Plugin.Log.LogInfo("Creatures: " + Creatures.Count + (Effect == null ? " (sand burst effect not found)" : ""));
+            int humans = Creatures.Count(c => c.IsHuman);
+            Plugin.Log.LogInfo("Creatures: " + (Creatures.Count - humans) + " mutants, " + humans + " humans" + (Effect == null ? " (sand burst effect not found)" : ""));
+            Plugin.Verbose("Humans: " + string.Join(", ", Creatures.Where(c => c.IsHuman).Select(c => c.Key).ToArray()));
+        }
+
+        // The codex page of a creature = prefix of the __GameManager__ [Codex] flag its own Codex FSM sets ("mutant_5", "scrapyard_3", ...).
+        private static string CodexPage(List<PlayMakerFSM> fsms)
+        {
+            foreach (var f in fsms)
+            {
+                if (f.FsmName != "Codex") continue;
+                try
+                {
+                    foreach (var st in f.FsmStates)
+                    {
+                        if (st == null) continue;
+                        if (st.Actions == null || st.Actions.Length == 0) st.LoadActions();
+                        if (st.Actions == null) continue;
+                        foreach (var a in st.Actions)
+                        {
+                            if (a == null) continue;
+                            foreach (var fi in a.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
+                            {
+                                if (fi.FieldType != typeof(FsmString)) continue;
+                                var v = fi.GetValue(a) as FsmString;
+                                var m = v != null && v.Value != null ? CodexVar.Match(v.Value) : null;
+                                if (m != null && m.Success) return m.Groups[1].Value;
+                            }
+                        }
+                    }
+                }
+                catch (Exception) { }
+            }
+            return null;
         }
 
         // ------------------------------------------------------------------ per-creature config
 
-        public const string SectionPrefix = "Creature: ";
+        public const string MutantPrefix = "Mutants: ", HumanPrefix = "Humans: ";
 
-        public static string Section(Creature c) { return SectionPrefix + SafeKey(c.Key); }
+        public static bool IsCreatureSection(string section) { return section.StartsWith(MutantPrefix) || section.StartsWith(HumanPrefix); }
+
+        public static string Section(Creature c) { return (c.IsHuman ? HumanPrefix : MutantPrefix) + SafeKey(c.Key); }
 
         // Default difficulty tiers by prefab health (Health FSM "Health"): tougher creatures need more distance travelled and
         // more bosses killed, come in smaller groups, farther away, less often, and only at higher car speed.
@@ -130,7 +175,7 @@ namespace Apocatremors
 
         private static void BindAll(List<Creature> found)
         {
-            int nListed = found.Count(c => c.InGameLists && !c.IsBoss && c.Key != "Burrower");
+            int nListed = found.Count(c => c.InGameLists && !c.IsBoss && !c.IsHuman && c.Key != "Burrower");
             float share = nListed > 0 ? Mathf.Clamp(Mathf.Floor(60f / nListed), 1f, 8f) : 0f;
             var bosses = found.Where(c => c.IsBoss).OrderBy(c => c.Health).ThenBy(c => c.Key).ToList();
 
@@ -142,10 +187,10 @@ namespace Apocatremors
                 string s = Section(c);
                 bool worm = c.Key == "Burrower";
                 var t = Tiers.First(x => c.Health <= x.MaxHp);
-                float chance = c.InGameLists && !c.IsBoss ? Mathf.Max(1f, Mathf.Round(share * t.Factor)) : 0f;
+                float chance = c.InGameLists && !c.IsBoss && !c.IsHuman ? Mathf.Max(1f, Mathf.Round(share * t.Factor)) : 0f;
                 float km = t.Km, dMin = t.DMin, dMax = t.DMax, speed = t.Speed;
                 int bossKills = t.Bosses, gMin = t.GMin, gMax = t.GMax;
-                if (worm) { chance = 25f; km = 0f; bossKills = 0; gMin = 1; gMax = 2; }       // the signature ambush, from the start
+                if (worm && !c.IsHuman) { chance = 25f; km = 0f; bossKills = 0; gMin = 1; gMax = 2; }       // the signature ambush, from the start
                 if (c.IsBoss)
                 {
                     // bosses: off by default; if enabled, only far out and after most of the other bosses are dead
@@ -158,6 +203,7 @@ namespace Apocatremors
 
                 c.Chance = Plugin.Cfg.Bind(s, "Chance", chance, new ConfigDescription(
                     "% chance to be picked per ambush roll (the rest of 100 % = nothing)" + (c.IsBoss ? " - boss" : "") +
+                    (c.IsHuman ? " - human: never spawns while 0" : "") +
                     (c.InGameLists ? " - in the game's wild spawn lists" : ""), new AcceptableValueRange<float>(0f, 100f)));
                 c.GroupMin = Plugin.Cfg.Bind(s, "GroupMin", gMin, new ConfigDescription(
                     "Smallest group at heat 100 %", new AcceptableValueRange<int>(1, 50)));
