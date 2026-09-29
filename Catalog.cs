@@ -20,11 +20,12 @@ namespace Apocatremors
 
         // [Creature: <Key>]
         public ConfigEntry<float> Chance, DistanceMin, DistanceMax, MinCarSpeedKmh, MinTravelKm, MaxTravelKm;
-        public ConfigEntry<int> GroupMin, GroupMax;
+        public ConfigEntry<int> GroupMin, GroupMax, MinBossKills;
         public ConfigEntry<string> Name, Plural;
 
-        public bool Allowed(float kmh, float travelKm)
+        public bool Allowed(float kmh, float travelKm, int bossKills)
         {
+            if (bossKills < MinBossKills.Value) return false;
             if (Chance.Value <= 0f) return false;
             if (kmh < MinCarSpeedKmh.Value) return false;
             if (travelKm < MinTravelKm.Value) return false;
@@ -82,6 +83,7 @@ namespace Apocatremors
                 if (go.name == "Burrower_Effect" && names.Contains("DestroySelf")) { Effect = go; continue; }
                 if (!names.Contains("Health") || !(names.Contains("Attack") || names.Contains("Detection"))) continue;
                 if (go.GetComponent<Rigidbody>() == null) continue;
+                if (names.Contains("PlayerIsEnemy")) continue;                   // traders (Merchant, Mechanic, ...) - friendly until attacked
                 if (Suffixes.Any(s => go.name.EndsWith(s, StringComparison.OrdinalIgnoreCase))) continue;
                 if (exclude.Contains(go.name)) continue;
                 if (found.Any(c => c.Key == go.name)) continue;
@@ -105,8 +107,9 @@ namespace Apocatremors
               .Append(", game lists=").Append(listed.Count).Append('\n');
             foreach (var c in Creatures)
                 sb.Append("  ").Append(c.Key).Append(" hp=").Append(c.Health.ToString("0.#")).Append(" chance=").Append(c.Chance.Value)
+                  .Append(" dist=").Append(c.DistanceMin.Value).Append('-').Append(c.DistanceMax.Value).Append(" kmh>=").Append(c.MinCarSpeedKmh.Value)
                   .Append(" group=").Append(c.GroupMin.Value).Append('-').Append(c.GroupMax.Value)
-                  .Append(" km>=").Append(c.MinTravelKm.Value).Append(c.MaxTravelKm.Value > 0f ? " km<=" + c.MaxTravelKm.Value : "")
+                  .Append(" km>=").Append(c.MinTravelKm.Value).Append(" bosses>=").Append(c.MinBossKills.Value).Append(c.MaxTravelKm.Value > 0f ? " km<=" + c.MaxTravelKm.Value : "")
                   .Append(c.IsBoss ? " boss" : "").Append(c.InGameLists ? " listed" : "").Append(" \"").Append(c.Plural.Value).Append('"').Append('\n');
             Plugin.Log.LogInfo(sb.ToString().TrimEnd());
             LogVanillaSpawners();
@@ -116,15 +119,31 @@ namespace Apocatremors
 
         public static string Section(Creature c) { return "Creature: " + SafeKey(c.Key); }
 
+        // Default difficulty tiers by prefab health (Health FSM "Health"): tougher creatures need more distance travelled and
+        // more bosses killed, come in smaller groups, farther away, less often, and only at higher car speed.
+        private class Tier
+        {
+            public float MaxHp, Km, Factor, DMin, DMax, Speed; public int Bosses, GMin, GMax;
+            public Tier(float maxHp, float km, int bosses, int gMin, int gMax, float dMin, float dMax, float factor, float speed)
+            { MaxHp = maxHp; Km = km; Bosses = bosses; GMin = gMin; GMax = gMax; DMin = dMin; DMax = dMax; Factor = factor; Speed = speed; }
+        }
+
+        private static readonly Tier[] Tiers =
+        {
+            //        max hp        km  bosses group  distance  chance× km/h
+            new Tier(15f,            0f, 0, 3, 5,  40f,  80f, 1.3f, 10f),   // rats, small scorpions/spiders, bats
+            new Tier(35f,            5f, 0, 2, 4,  45f,  85f, 1.1f, 15f),   // big scorpions/spiders, wasps, blast zombies
+            new Tier(60f,           10f, 0, 2, 3,  50f,  90f, 1.0f, 15f),   // runners, hounds, arachnids
+            new Tier(100f,          20f, 1, 1, 2,  60f, 100f, 0.7f, 20f),   // nightwalkers, scrapyard gang
+            new Tier(300f,          30f, 2, 1, 2,  70f, 110f, 0.5f, 25f),   // flexa, gunnar, skinwal
+            new Tier(float.MaxValue, 40f, 3, 1, 1, 80f, 120f, 0.3f, 30f),   // lanky, juggernaut
+        };
+
         private static void BindAll(List<Creature> found)
         {
-            // difficulty rank by prefab health among the non-boss creatures (0 = weakest, 1 = strongest)
-            var ranked = found.Where(c => !c.IsBoss && c.Key != "Burrower").OrderBy(c => c.Health).ThenBy(c => c.Key).ToList();
-            var rank = new Dictionary<Creature, float>();
-            for (int i = 0; i < ranked.Count; i++) rank[ranked[i]] = ranked.Count > 1 ? i / (float)(ranked.Count - 1) : 0f;
-
             int nListed = found.Count(c => c.InGameLists && !c.IsBoss && c.Key != "Burrower");
-            float share = nListed > 0 ? Mathf.Clamp(Mathf.Floor(70f / nListed), 1f, 8f) : 0f;
+            float share = nListed > 0 ? Mathf.Clamp(Mathf.Floor(60f / nListed), 1f, 8f) : 0f;
+            var bosses = found.Where(c => c.IsBoss).OrderBy(c => c.Health).ThenBy(c => c.Key).ToList();
 
             bool old = Plugin.Cfg.SaveOnConfigSet;
             Plugin.Cfg.SaveOnConfigSet = false;
@@ -132,18 +151,20 @@ namespace Apocatremors
             foreach (var c in found)
             {
                 string s = Section(c);
-                float p; rank.TryGetValue(c, out p);
                 bool worm = c.Key == "Burrower";
-
-                // defaults: worm 30 %, the game's wild mutant/carnivore lists share ~70 %, everything else (humans, bosses) 0;
-                // tougher creatures need more distance travelled and come in smaller groups
-                float chance = worm ? 30f : (c.IsBoss ? 0f : (c.InGameLists ? share : 0f));
-                float migrated;
-                string old01 = Plugin.TakeOrphan("Chances", SafeKey(c.Key));
-                if (old01 != null && float.TryParse(old01, NumberStyles.Float, CultureInfo.InvariantCulture, out migrated)) chance = Mathf.Clamp(migrated, 0f, 100f);
-                float km = worm ? 0f : (c.IsBoss ? 40f : Mathf.Round(p * 6f) * 5f);          // 0..30 km in 5 km steps
-                int gMin = worm ? 1 : (c.IsBoss ? 1 : (p < 0.34f ? 2 : 1));
-                int gMax = worm ? 2 : (c.IsBoss ? 1 : (p < 0.34f ? 4 : (p < 0.67f ? 3 : 2)));
+                var t = Tiers.First(x => c.Health <= x.MaxHp);
+                float chance = c.InGameLists && !c.IsBoss ? Mathf.Max(1f, Mathf.Round(share * t.Factor)) : 0f;
+                float km = t.Km, dMin = t.DMin, dMax = t.DMax, speed = t.Speed;
+                int bossKills = t.Bosses, gMin = t.GMin, gMax = t.GMax;
+                if (worm) { chance = 25f; km = 0f; bossKills = 0; gMin = 1; gMax = 2; }       // the signature ambush, from the start
+                if (c.IsBoss)
+                {
+                    // bosses: off by default; if enabled, only far out and after most of the other bosses are dead
+                    int i = bosses.IndexOf(c), n = bosses.Count;
+                    bossKills = 3 + (n > 1 ? Mathf.RoundToInt(4f * i / (n - 1)) : 4);        // weakest boss 3 kills ... strongest 7
+                    km = 50f + 10f * Mathf.Floor(4f * i / Mathf.Max(1, n - 1)) / 2f;          // 50..70 km
+                    gMin = gMax = 1; dMin = 90f; dMax = 130f; speed = 30f; chance = 0f;
+                }
                 string name = Prettify(c.Key);
 
                 c.Chance = Plugin.Cfg.Bind(s, "Chance", chance, new ConfigDescription(
@@ -153,23 +174,39 @@ namespace Apocatremors
                     "Smallest group at heat 100 %", new AcceptableValueRange<int>(1, 50)));
                 c.GroupMax = Plugin.Cfg.Bind(s, "GroupMax", gMax, new ConfigDescription(
                     "Largest group at heat 100 %", new AcceptableValueRange<int>(1, 50)));
-                c.DistanceMin = Plugin.Cfg.Bind(s, "DistanceMin", 50f, new ConfigDescription(
+                c.DistanceMin = Plugin.Cfg.Bind(s, "DistanceMin", dMin, new ConfigDescription(
                     "Nearest spawn distance from the car (m)", new AcceptableValueRange<float>(5f, 500f)));
-                c.DistanceMax = Plugin.Cfg.Bind(s, "DistanceMax", 90f, new ConfigDescription(
+                c.DistanceMax = Plugin.Cfg.Bind(s, "DistanceMax", dMax, new ConfigDescription(
                     "Farthest spawn distance from the car (m)", new AcceptableValueRange<float>(5f, 500f)));
-                c.MinCarSpeedKmh = Plugin.Cfg.Bind(s, "MinCarSpeedKmh", 15f, new ConfigDescription(
+                c.MinCarSpeedKmh = Plugin.Cfg.Bind(s, "MinCarSpeedKmh", speed, new ConfigDescription(
                     "Only picked while the car is at least this fast (km/h)", new AcceptableValueRange<float>(0f, 150f)));
                 c.MinTravelKm = Plugin.Cfg.Bind(s, "MinTravelKm", km, new ConfigDescription(
                     "Only picked once the game's Distance Travelled is at least this far (km)", new AcceptableValueRange<float>(0f, 200f)));
                 c.MaxTravelKm = Plugin.Cfg.Bind(s, "MaxTravelKm", 0f, new ConfigDescription(
                     "No longer picked beyond this Distance Travelled (km, 0 = no limit)", new AcceptableValueRange<float>(0f, 200f)));
+                c.MinBossKills = Plugin.Cfg.Bind(s, "MinBossKills", bossKills, new ConfigDescription(
+                    "Only picked once at least this many of the game's 7 bosses are dead", new AcceptableValueRange<int>(0, 7)));
                 c.Name = Plugin.Cfg.Bind(s, "Name", name, "Name used in the notification ({name})");
                 c.Plural = Plugin.Cfg.Bind(s, "Plural", Pluralize(name), "Plural name used in the notification ({plural})");
                 Creatures.Add(c);
             }
-            Plugin.DropOrphans(k => k.Section == "Chances");   // 0.1.0 table, migrated into the creature sections above
+            Plugin.DropOrphans(k => k.Section == "Chances");   // 0.1.0 table
             Plugin.Cfg.SaveOnConfigSet = old;
             Plugin.Cfg.Save();
+        }
+
+        // Killed bosses = true global bools Boss_* (Boss_Alpha_Nightwalker, Boss_Black_Juggernaut, Boss_Buzzgut, Boss_Collage_Teacher,
+        // Boss_Duke_Ironjaw, Boss_Scorpion_King, Boss_Terror_of_the_Night) - the flags the player sheet's boss list reads.
+        public static int BossKills()
+        {
+            int n = 0;
+            try
+            {
+                foreach (var b in FsmVariables.GlobalVariables.BoolVariables)
+                    if (b != null && b.Name != null && b.Name.StartsWith("Boss_") && b.Value) n++;
+            }
+            catch (Exception) { }
+            return n;
         }
 
         public static float TotalChance(Func<Creature, bool> allowed)

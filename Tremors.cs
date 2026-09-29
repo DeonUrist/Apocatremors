@@ -19,6 +19,7 @@ namespace Apocatremors
         // ambush state
         private float _cooldown = -1f;       // in "heat 100 %" seconds
         private float _travelKm, _heat;
+        private int _bossKills;
         private PlayMakerFSM _distanceFsm;
         private int _retries;
         private readonly List<GameObject> _alive = new List<GameObject>();
@@ -171,6 +172,7 @@ namespace Apocatremors
             }
             if (km < 0f) return;
             _travelKm = km;
+            _bossKills = Catalog.BossKills();
             _heat = Mathf.Clamp(km / 10f * Mathf.Max(0f, Plugin.HeatPer10Km.Value), 0f, Mathf.Max(0.01f, Plugin.MaxHeat.Value));
         }
 
@@ -217,7 +219,8 @@ namespace Apocatremors
                 _cooldown = 20f; return;
             }
             float km = _travelKm;
-            Func<Creature, bool> allowed = x => x.Allowed(kmh, km);
+            int bk = _bossKills;
+            Func<Creature, bool> allowed = x => x.Allowed(kmh, km, bk);
             if (test) allowed = x => x.Chance.Value > 0f;    // the test key ignores speed and travel limits
             var c = forced;
             if (c == null)
@@ -229,7 +232,7 @@ namespace Apocatremors
             if (c == null)
             {
                 Plugin.Verbose("Ambush roll: nothing (" + Catalog.TotalChance(allowed).ToString("0.#") + " % total for " +
-                    kmh.ToString("0") + " km/h at " + km.ToString("0.0") + " km)");
+                    kmh.ToString("0") + " km/h at " + km.ToString("0.0") + " km, " + bk + " bosses killed)");
                 ResetCooldown(); return;
             }
 
@@ -257,7 +260,7 @@ namespace Apocatremors
                 }
 
             Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + " at " + Vector3.Distance(origin, ground).ToString("0") + " m, heat " +
-                (_heat * 100f).ToString("0") + " % (" + _travelKm.ToString("0.0") + " km)" + (test ? " (test)" : ""));
+                (_heat * 100f).ToString("0") + " % (" + _travelKm.ToString("0.0") + " km, " + _bossKills + " bosses killed)" + (test ? " (test)" : ""));
             Notice.Show((Plugin.NotificationText.Value ?? "")
                 .Replace("{plural}", c.Plural.Value).Replace("{name}", c.Name.Value).Replace("{count}", spots.Count.ToString()));
             float delay = 0f;

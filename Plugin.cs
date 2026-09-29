@@ -18,7 +18,7 @@ namespace Apocatremors
     {
         public const string GUID = "com.denis.apocalypter.apocatremors";
         public const string NAME = "Apocatremors";
-        public const string VERSION = "0.2.0";
+        public const string VERSION = "0.3.0";
 
         internal static ManualLogSource Log;
         internal static ConfigFile Cfg;
@@ -58,8 +58,8 @@ namespace Apocatremors
                 "Debug: spawn one ambush right now (ignores speed, cooldown, heat and travel limits; on foot it spawns ahead of the camera). None = off");
             TestType = Config.Bind("General", "TestType", "",
                 "Debug: prefab name the TestKey spawns (e.g. Burrower). Empty = pick by the creatures' chances");
-            Exclude = Config.Bind("General", "Exclude", "Merchant,Mechanic,Organic_Mechanic,Professor,Teacher",
-                "Comma-separated prefab names never offered as ambush creatures (traders etc.)");
+            Exclude = Config.Bind("General", "Exclude", "",
+                "Comma-separated prefab names never offered as ambush creatures (traders are always left out)");
             VerboseLog = Config.Bind("General", "VerboseLog", false, "Log every roll, the heat and why spawn spots were rejected");
 
             MinSpeedKmh = Config.Bind("Trigger", "MinSpeedKmh", 15f, new ConfigDescription(

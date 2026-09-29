@@ -23,21 +23,29 @@ The farther you get from the starting area, the more often they come and the big
   far-away cleanup applies. The mod also removes its creatures farther than `DespawnDistance`.
 - **Notification.** "Your engine's roar has roused Big Scorpions nearby." top left, in the font and size of the game's new-codex-entry
   notice, red (`NotificationColor`). Text template `NotificationText` with `{plural}`, `{name}`, `{count}`; off with `ShowNotification`.
+- **Boss kills** = the game's global `Boss_*` flags (the boss list on the player sheet).
 - Respects the game's peaceful mode. Shows up in the Apocasetter Mods menu (optional, no dependency).
 
 ## Per-creature settings — `[Creature: <prefab>]`
-Created on the first game start for every enemy prefab the game has (traders, `_BACKUP` and `_Sanity` variants are left out):
+Created on the first game start for every enemy prefab the game has (traders and the `_BACKUP` / `_Sanity` variants are left out):
+`Chance`, `GroupMin`/`GroupMax` (at 100 % heat), `DistanceMin`/`DistanceMax` (m from the car), `MinCarSpeedKmh`,
+`MinTravelKm`/`MaxTravelKm` (Distance Travelled window, max 0 = none), `MinBossKills` (0–7: how many of the game's 7 bosses must be dead),
+`Name`/`Plural` (for the notification). A creature is only picked when all of its limits are met.
 
-| Key | Meaning | Default |
-|---|---|---|
-| `Chance` | % chance per roll | Burrower 30, the game's wild mutant/carnivore spawn lists share ~70, humans/bosses 0 |
-| `GroupMin` / `GroupMax` | group size at 100 % heat | weak 2–4, medium 1–3, strong 1–2, bosses 1, Burrower 1–2 |
-| `DistanceMin` / `DistanceMax` | spawn distance from the car (m) | 50 / 90 |
-| `MinCarSpeedKmh` | only while the car is at least this fast | 15 |
-| `MinTravelKm` / `MaxTravelKm` | Distance Travelled window (km, max 0 = none) | 0–30 km by toughness (prefab health), bosses 40, Burrower 0 |
-| `Name` / `Plural` | names for the notification | from the prefab name (`Scorpion_Big` → Big Scorpion / Big Scorpions) |
+Defaults scale with toughness (prefab health) — tougher creatures come later, after boss kills, in smaller groups, farther away, less often:
 
-Settings from 0.1.0: the `[Chances]` values are moved into the creature sections; the old global group/distance settings are dropped.
+| Health | Examples | Min km | Bosses | Group | Distance | Min km/h | Chance* |
+|---|---|---|---|---|---|---|---|
+| ≤ 15 | rats, small scorpions/spiders, bats | 0 | 0 | 3–5 | 40–80 | 10 | 8 |
+| ≤ 35 | big scorpions/spiders, wasps, blast zombies | 5 | 0 | 2–4 | 45–85 | 15 | 7 |
+| ≤ 60 | zombie runners, hounds, arachnids | 10 | 0 | 2–3 | 50–90 | 15 | 6 |
+| ≤ 100 | nightwalkers, the scrapyard gang | 20 | 1 | 1–2 | 60–100 | 20 | 4 |
+| ≤ 300 | Flexa, Gunnar, Skinwal | 30 | 2 | 1–2 | 70–110 | 25 | 3 |
+| > 300 | Lanky, Juggernaut | 40 | 3 | 1 | 80–120 | 30 | 2 |
+| bosses | Scorpion King … Black Juggernaut | 50–70 | 3–7 | 1 | 90–130 | 30 | 0 |
+
+\* Chance only for creatures in the game's own wild mutant/carnivore spawn lists; the rest start at 0 (enable them by giving them a Chance).
+The Burrower is the exception: 25 %, from 0 km, groups of 1–2.
 
 ## Test key
 `TestKey` (default F8) spawns one ambush immediately (driving: ahead of the car; on foot: ahead of the camera), ignoring speed, heat and
