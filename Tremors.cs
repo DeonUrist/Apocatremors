@@ -333,7 +333,8 @@ namespace Apocatremors
 
         private bool FindSpot(Vector3 origin, Vector3 dir, float r, Creature c, out Vector3 ground)
         {
-            float dMin = Mathf.Max(5f, c.DistanceMin.Value), dMax = Mathf.Max(dMin, c.DistanceMax.Value);
+            float mult = Mathf.Clamp(Plugin.DistanceMultiplier.Value, 0.1f, 10f);
+            float dMin = Mathf.Max(5f, c.DistanceMin.Value * mult), dMax = Mathf.Max(dMin, c.DistanceMax.Value * mult);
             float spread = Mathf.Clamp(Plugin.SpreadAngle.Value, 0f, 180f);
             for (int i = 0; i < MaxTries; i++)
             {

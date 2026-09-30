@@ -14,7 +14,7 @@ The farther you get from the starting area, the more often they come and the big
 - **Roll.** When it runs out, one creature is picked among those allowed right now (car speed ≥ its `MinCarSpeedKmh`, Distance Travelled
   between its `MinTravelKm` and `MaxTravelKm`). Each creature's `Chance` is its % to be picked; the rest of 100 % = nothing spawns
   (a table above 100 % is scaled down). `GroupMin..GroupMax` × heat of that creature appear together (capped by `MaxAlive`).
-- **Spot.** Ahead of the car, the creature's `DistanceMin..DistanceMax` away, within `SpreadAngle` of the driving direction. It must be
+- **Spot.** Ahead of the car, the creature's `DistanceMin..DistanceMax` away (times `DistanceMultiplier`), within `SpreadAngle` of the driving direction. It must be
   open terrain: looking straight down the first hit is the ground (not a roof, rock, car or prop), slope ≤ `MaxSlope`, height within
   `MaxHeightDiff` of the car, flat within `FlatTolerance`, at least `StructureBuffer` from camps/wrecks/caves/buildings, and
   `ClearRadius` of free space. Up to 14 spots are tried, then it retries a few times a few seconds later.

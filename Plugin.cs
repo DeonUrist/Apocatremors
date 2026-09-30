@@ -20,7 +20,7 @@ namespace Apocatremors
     {
         public const string GUID = "com.denis.apocalypter.apocatremors";
         public const string NAME = "Apocatremors";
-        public const string VERSION = "1.1.0";
+        public const string VERSION = "1.1.1";
 
         internal static ManualLogSource Log;
         internal static ConfigFile Cfg;
@@ -36,7 +36,7 @@ namespace Apocatremors
         internal static ConfigEntry<bool> AiCars;
         internal static ConfigEntry<float> AiCooldownMultiplier, AiSkipChance, AiMaxPlayerDistance, PlayerCooldownMultiplier, PlayerSkipChance;
         internal static ConfigEntry<string> AiNotificationText;
-        internal static ConfigEntry<float> SpreadAngle, MaxSlope, MaxHeightDiff, FlatTolerance, StructureBuffer, ClearRadius;
+        internal static ConfigEntry<float> DistanceMultiplier, SpreadAngle, MaxSlope, MaxHeightDiff, FlatTolerance, StructureBuffer, ClearRadius;
         internal static ConfigEntry<float> EffectLeadSeconds, RiseSeconds, DespawnDistance;
         internal static ConfigEntry<bool> RegisterWithGame, SurfaceBurst;
         internal static ConfigEntry<Key> TestKey;
@@ -112,6 +112,8 @@ namespace Apocatremors
             PlayerSkipChance = Config.Bind("Apocapatrol", "PlayerSkipChance", 25f, new ConfigDescription(
                 "While Apocapatrol is loaded, percentage of your ambush rolls that spawn nothing", new AcceptableValueRange<float>(0f, 100f)));
 
+            DistanceMultiplier = Config.Bind("Placement", "DistanceMultiplier", 1f, new ConfigDescription(
+                "Multiplies every creature's DistanceMin/DistanceMax (0.1 = ten times closer, 10 = ten times farther)", new AcceptableValueRange<float>(0.1f, 10f)));
             SpreadAngle = Config.Bind("Placement", "SpreadAngle", 35f, new ConfigDescription(
                 "Max angle left/right of the driving direction (degrees)", new AcceptableValueRange<float>(0f, 180f)));
             MaxSlope = Config.Bind("Placement", "MaxSlope", 25f, new ConfigDescription(
