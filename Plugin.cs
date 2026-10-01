@@ -20,28 +20,35 @@ namespace Apocatremors
     {
         public const string GUID = "com.denis.apocalypter.apocatremors";
         public const string NAME = "Apocatremors";
-        public const string VERSION = "1.1.1";
+        public const string VERSION = "1.2.0";
 
         internal static ManualLogSource Log;
         internal static ConfigFile Cfg;
 
+        // [General] / [Apocapatrol] / [Debug]
         internal static ConfigEntry<bool> Enabled, ShowNotification;
-        internal static ConfigEntry<string> NotificationText, NotificationColor;
-        internal static ConfigEntry<float> NotificationSeconds;
-        internal static ConfigEntry<float> MinSpeedKmh, CooldownMinSeconds, CooldownMaxSeconds;
+        internal static ConfigEntry<float> CooldownMinSeconds, CooldownMaxSeconds, SkipChance, DistanceMultiplier, DespawnDistance;
         internal static ConfigEntry<int> MaxAlive;
-        internal static ConfigEntry<bool> RespectPeacefulMode;
-        internal static ConfigEntry<float> HeatPer10Km, MaxHeat;
-        internal static ConfigEntry<bool> HeatScalesGroup, HeatScalesCooldown;
         internal static ConfigEntry<bool> AiCars;
-        internal static ConfigEntry<float> AiCooldownMultiplier, AiSkipChance, AiMaxPlayerDistance, PlayerCooldownMultiplier, PlayerSkipChance;
-        internal static ConfigEntry<string> AiNotificationText;
-        internal static ConfigEntry<float> DistanceMultiplier, SpreadAngle, MaxSlope, MaxHeightDiff, FlatTolerance, StructureBuffer, ClearRadius;
-        internal static ConfigEntry<float> EffectLeadSeconds, RiseSeconds, DespawnDistance;
-        internal static ConfigEntry<bool> RegisterWithGame, SurfaceBurst;
+        internal static ConfigEntry<float> PlayerCooldownMultiplier, PlayerSkipChance;
         internal static ConfigEntry<Key> TestKey;
-        internal static ConfigEntry<string> TestType, Exclude;
         internal static ConfigEntry<bool> VerboseLog;
+
+        // Fixed tuning (was configurable before 1.2.0; the values are the former defaults as tuned in play)
+        internal const string NotificationText = "Your engine's roar has roused {plural} nearby.";
+        internal const string NotificationColor = "#FF3030";
+        internal const float NotificationSeconds = 4f;
+        internal const float MinSpeedKmh = 15f;                 // the ambush roll waits until the car is at least this fast (km/h)
+        internal const bool RespectPeacefulMode = true;
+        internal const float HeatPer10Km = 0.5f, MaxHeat = 3f;  // 50 % heat at 10 km, 100 % at 20 km, ... up to 300 %
+        internal const bool HeatScalesGroup = true, HeatScalesCooldown = true;
+        internal const float AiCooldownMultiplier = 2f, AiSkipChance = 50f, AiMaxPlayerDistance = 250f;
+        internal const string AiNotificationText = "The roar of an engine nearby has roused {plural}.";
+        internal const float SpreadAngle = 35f, MaxSlope = 25f, MaxHeightDiff = 8f, FlatTolerance = 1.5f, StructureBuffer = 40f, ClearRadius = 2f;
+        internal const float EffectLeadSeconds = 0.35f, RiseSeconds = 1.2f;
+        internal const bool SurfaceBurst = true, RegisterWithGame = true;
+        internal const string TestType = "";                     // prefab the TestKey spawns; empty = roll by chance
+        internal static readonly string[] Exclude = new string[0];   // prefab names never offered (traders/friendly NPCs are always left out)
 
         private static GameObject _runner;
 
@@ -51,7 +58,7 @@ namespace Apocatremors
             Cfg = Config;
             Config.SaveOnConfigSet = false;
             BindGlobals();
-            DropOrphans(k => !Catalog.IsCreatureSection(k.Section));   // settings from older versions; creature sections are bound later
+            DropOrphans(k => true);   // settings from older versions (incl. the per-creature sections of 1.x)
             new Harmony(GUID).Patch(AccessTools.Method(typeof(ConfigFile), "Save"), postfix: new HarmonyMethod(typeof(Plugin), nameof(AfterSave)));
             Config.Save();
             Config.SaveOnConfigSet = true;
@@ -61,87 +68,40 @@ namespace Apocatremors
             Log.LogInfo(NAME + " " + VERSION + " loaded");
         }
 
-        // Bind order = order in the Apocasetter menu and (via AfterSave) in the file; [Mutants/Humans/Bosses/Other: …] follow after [Debug].
+        // Bind order = order in the Apocasetter menu and (via AfterSave) in the file.
         private void BindGlobals()
         {
             Config.Bind("General", "Apocasetter", true, "Show this mod in the Apocasetter Mods menu");
             Enabled = Config.Bind("General", "Enabled", true, "Spawn desert ambushes while driving");
             ShowNotification = Config.Bind("General", "ShowNotification", true,
                 "Top-left message (codex-entry style, red) when an ambush starts");
-            NotificationText = Config.Bind("General", "NotificationText", "Your engine's roar has roused {plural} nearby.",
-                "Message text. {plural} = the creature's plural name, {name} = singular name, {count} = how many");
-            NotificationColor = Config.Bind("General", "NotificationColor", "#FF3030", "Message colour (HTML hex)");
-            NotificationSeconds = Config.Bind("General", "NotificationSeconds", 4f, new ConfigDescription(
-                "How long the message stays (s)", new AcceptableValueRange<float>(0.5f, 30f)));
-
-            MinSpeedKmh = Config.Bind("Trigger", "MinSpeedKmh", 15f, new ConfigDescription(
-                "The ambush clock only runs while driving at least this fast (km/h). Each creature also has its own MinCarSpeedKmh",
-                new AcceptableValueRange<float>(0f, 150f)));
-            CooldownMinSeconds = Config.Bind("Trigger", "CooldownMinSeconds", 90f, new ConfigDescription(
-                "Shortest driving time between two ambush rolls at heat 100 % (seconds)", new AcceptableValueRange<float>(1f, 3600f)));
-            CooldownMaxSeconds = Config.Bind("Trigger", "CooldownMaxSeconds", 240f, new ConfigDescription(
-                "Longest driving time between two ambush rolls at heat 100 % (seconds)", new AcceptableValueRange<float>(1f, 3600f)));
-            MaxAlive = Config.Bind("Trigger", "MaxAlive", 6, new ConfigDescription(
+            CooldownMinSeconds = Config.Bind("General", "CooldownMinSeconds", 90f, new ConfigDescription(
+                "Shortest time between two ambush rolls at heat 100 % (seconds). The clock also runs on foot; the roll waits until you drive " +
+                "at least 15 km/h", new AcceptableValueRange<float>(1f, 3600f)));
+            CooldownMaxSeconds = Config.Bind("General", "CooldownMaxSeconds", 1200f, new ConfigDescription(
+                "Longest time between two ambush rolls at heat 100 % (seconds)", new AcceptableValueRange<float>(1f, 3600f)));
+            SkipChance = Config.Bind("General", "SkipChance", 25f, new ConfigDescription(
+                "Percentage of ambush rolls that spawn nothing (the clock just restarts)", new AcceptableValueRange<float>(0f, 100f)));
+            DistanceMultiplier = Config.Bind("General", "DistanceMultiplier", 1f, new ConfigDescription(
+                "Multiplies every creature's spawn distance from the car (0.1 = ten times closer, 10 = ten times farther)",
+                new AcceptableValueRange<float>(0.1f, 10f)));
+            DespawnDistance = Config.Bind("General", "DespawnDistance", 300f, new ConfigDescription(
+                "Remove spawned creatures farther than this from the player (m, 0 = never)", new AcceptableValueRange<float>(0f, 2000f)));
+            MaxAlive = Config.Bind("General", "MaxAlive", 8, new ConfigDescription(
                 "No new ambush while this many spawned creatures are still alive", new AcceptableValueRange<int>(1, 500)));
-            RespectPeacefulMode = Config.Bind("Trigger", "RespectPeacefulMode", true, "No ambushes while the game's peaceful mode is on");
-
-            HeatPer10Km = Config.Bind("Heat", "HeatPer10Km", 0.5f, new ConfigDescription(
-                "Heat gained per 10 km of the game's Distance Travelled (distance from the starting area). 0 km = no ambushes; " +
-                "default: 50 % at 10 km, 100 % at 20 km, +50 % per further 10 km", new AcceptableValueRange<float>(0f, 5f)));
-            MaxHeat = Config.Bind("Heat", "MaxHeat", 3f, new ConfigDescription(
-                "Upper limit of the heat multiplier (3 = 300 %)", new AcceptableValueRange<float>(0.1f, 20f)));
-            HeatScalesGroup = Config.Bind("Heat", "HeatScalesGroup", true, "Group sizes are multiplied by the heat (at least 1)");
-            HeatScalesCooldown = Config.Bind("Heat", "HeatScalesCooldown", true,
-                "The ambush clock runs heat times as fast (50 % heat = twice the wait, 200 % = half)");
 
             // Everything in [Apocapatrol] only takes effect while the Apocapatrol plugin is loaded.
-            AiCars = Config.Bind("Apocapatrol", "AiCars", false,
-                "Apocapatrol's NPC-driven cars rouse ambushes too: creatures emerge ahead of a moving AI car, with the same rules as for you " +
-                "(heat, creature limits, MaxAlive). Only while Apocapatrol is loaded");
-            AiCooldownMultiplier = Config.Bind("Apocapatrol", "AiCooldownMultiplier", 2f, new ConfigDescription(
-                "Each AI car has its own ambush clock, this many times longer than CooldownMin/MaxSeconds", new AcceptableValueRange<float>(0.1f, 20f)));
-            AiSkipChance = Config.Bind("Apocapatrol", "AiSkipChance", 50f, new ConfigDescription(
-                "Percentage of AI-car ambush rolls that spawn nothing", new AcceptableValueRange<float>(0f, 100f)));
-            AiMaxPlayerDistance = Config.Bind("Apocapatrol", "AiMaxPlayerDistance", 250f, new ConfigDescription(
-                "AI cars farther than this from you get no ambushes (m)", new AcceptableValueRange<float>(20f, 2000f)));
-            AiNotificationText = Config.Bind("Apocapatrol", "AiNotificationText", "The roar of an engine nearby has roused {plural}.",
-                "Message when an AI car rouses an ambush ({plural}, {name}, {count} as above). Empty = no message");
+            AiCars = Config.Bind("Apocapatrol", "Enabled", false,
+                "Apocapatrol's NPC-driven cars rouse ambushes too: creatures emerge ahead of a moving AI car near you, with the same rules " +
+                "as for you (heat, creature limits, MaxAlive; their clock runs 2x slower and half their rolls spawn nothing). Only while Apocapatrol is loaded");
             PlayerCooldownMultiplier = Config.Bind("Apocapatrol", "PlayerCooldownMultiplier", 1.5f, new ConfigDescription(
                 "While Apocapatrol is loaded, your own ambush clock is this many times longer (its cars bring enemies of their own)",
                 new AcceptableValueRange<float>(0.1f, 20f)));
             PlayerSkipChance = Config.Bind("Apocapatrol", "PlayerSkipChance", 25f, new ConfigDescription(
-                "While Apocapatrol is loaded, percentage of your ambush rolls that spawn nothing", new AcceptableValueRange<float>(0f, 100f)));
-
-            DistanceMultiplier = Config.Bind("Placement", "DistanceMultiplier", 1f, new ConfigDescription(
-                "Multiplies every creature's DistanceMin/DistanceMax (0.1 = ten times closer, 10 = ten times farther)", new AcceptableValueRange<float>(0.1f, 10f)));
-            SpreadAngle = Config.Bind("Placement", "SpreadAngle", 35f, new ConfigDescription(
-                "Max angle left/right of the driving direction (degrees)", new AcceptableValueRange<float>(0f, 180f)));
-            MaxSlope = Config.Bind("Placement", "MaxSlope", 25f, new ConfigDescription(
-                "Steepest ground a creature may emerge from (degrees) - keeps them off mountainsides", new AcceptableValueRange<float>(1f, 89f)));
-            MaxHeightDiff = Config.Bind("Placement", "MaxHeightDiff", 8f, new ConfigDescription(
-                "Max height difference between the spot and the car (m) - no ridges or ravines", new AcceptableValueRange<float>(0.5f, 100f)));
-            FlatTolerance = Config.Bind("Placement", "FlatTolerance", 1.5f, new ConfigDescription(
-                "Max ground height variation around the spot (m)", new AcceptableValueRange<float>(0.1f, 20f)));
-            StructureBuffer = Config.Bind("Placement", "StructureBuffer", 40f, new ConfigDescription(
-                "Min distance from camps, wrecks, caves and buildings (m)", new AcceptableValueRange<float>(0f, 300f)));
-            ClearRadius = Config.Bind("Placement", "ClearRadius", 2f, new ConfigDescription(
-                "Free space needed around the spot (m); larger creatures get more", new AcceptableValueRange<float>(0.5f, 20f)));
-
-            EffectLeadSeconds = Config.Bind("Emerge", "EffectLeadSeconds", 0.35f, new ConfigDescription(
-                "Sand burst starts this long before the creature appears (s)", new AcceptableValueRange<float>(0f, 5f)));
-            RiseSeconds = Config.Bind("Emerge", "RiseSeconds", 1.2f, new ConfigDescription(
-                "How long the creature takes to rise out of the ground (s)", new AcceptableValueRange<float>(0.05f, 10f)));
-            SurfaceBurst = Config.Bind("Emerge", "SurfaceBurst", true, "Second sand burst (and sound) when the creature breaks the surface");
-            RegisterWithGame = Config.Bind("Emerge", "RegisterWithGame", true,
-                "Register spawned creatures like vanilla spawns (they are saved, and the game's far-away cleanup applies)");
-            DespawnDistance = Config.Bind("Emerge", "DespawnDistance", 300f, new ConfigDescription(
-                "Remove spawned creatures farther than this from the player (m, 0 = never)", new AcceptableValueRange<float>(0f, 2000f)));
+                "While Apocapatrol is loaded, percentage of your ambush rolls that spawn nothing (on top of SkipChance)", new AcceptableValueRange<float>(0f, 100f)));
 
             TestKey = Config.Bind("Debug", "TestKey", Key.None,
                 "Spawn one ambush right now, ignoring speed, cooldown, heat and all creature limits (e.g. F8); needs Enabled. None = off");
-            TestType = Config.Bind("Debug", "TestType", "", "Prefab name the TestKey spawns (e.g. Burrower). Empty = pick by the creatures' chances");
-            Exclude = Config.Bind("Debug", "Exclude", "",
-                "Comma-separated prefab names never offered as ambush creatures (traders and friendly NPCs are always left out)");
             VerboseLog = Config.Bind("Debug", "VerboseLog", false, "Log every ambush roll and spawn decision");
         }
 

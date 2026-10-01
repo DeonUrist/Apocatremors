@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using BepInEx.Configuration;
 using HutongGames.PlayMaker;
 using UnityEngine;
 
@@ -16,23 +15,24 @@ namespace Apocatremors
         public float Radius = 0.5f;     // from the prefab's capsule colliders
         public float Health;            // prefab Health FSM "Health" (difficulty proxy for the defaults)
 
-        // [<Group>: <Key>]
-        public ConfigEntry<float> Chance, DistanceMin, DistanceMax, MinCarSpeedKmh, MinTravelKm, MaxTravelKm;
-        public ConfigEntry<int> GroupMin, GroupMax, MinBossKills;
-        public ConfigEntry<string> Name, Plural;
+        // Spawn rules (fixed since 1.2.0; per-creature config sections before): % chance per roll (0 = never), distance window from the car (m),
+        // min car speed (km/h), Distance Travelled window (km, max 0 = none), bosses that must be dead, group size at heat 100 %, names.
+        public float Chance, DistanceMin, DistanceMax, MinCarSpeedKmh, MinTravelKm, MaxTravelKm;
+        public int GroupMin, GroupMax, MinBossKills;
+        public string Name, Plural;
 
         public bool Allowed(float kmh, float travelKm, int bossKills)
         {
-            if (bossKills < MinBossKills.Value) return false;
-            if (Chance.Value <= 0f) return false;
-            if (kmh < MinCarSpeedKmh.Value) return false;
-            if (travelKm < MinTravelKm.Value) return false;
-            if (MaxTravelKm.Value > 0f && travelKm > MaxTravelKm.Value) return false;
+            if (bossKills < MinBossKills) return false;
+            if (Chance <= 0f) return false;
+            if (kmh < MinCarSpeedKmh) return false;
+            if (travelKm < MinTravelKm) return false;
+            if (MaxTravelKm > 0f && travelKm > MaxTravelKm) return false;
             return true;
         }
     }
 
-    // Discovers the enemy prefabs the game has loaded, the Burrower_Effect sand burst, and binds one [<Group>: X] section per creature.
+    // Discovers the enemy prefabs the game has loaded, the Burrower_Effect sand burst, and assigns each creature its spawn rules.
     internal static class Catalog
     {
         public static readonly List<Creature> Creatures = new List<Creature>();
@@ -86,8 +86,7 @@ namespace Apocatremors
                 l.Add(f);
             }
 
-            var exclude = new HashSet<string>((Plugin.Exclude.Value ?? "").Split(',').Select(s => s.Trim()).Where(s => s.Length > 0),
-                StringComparer.OrdinalIgnoreCase);
+            var exclude = new HashSet<string>(Plugin.Exclude, StringComparer.OrdinalIgnoreCase);
 
             var found = new List<Creature>();
             Effect = null;
@@ -118,17 +117,13 @@ namespace Apocatremors
             found.Sort((a, b) => a.Group != b.Group ? Array.IndexOf(Groups, a.Group) - Array.IndexOf(Groups, b.Group)
                                                     : string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase));
 
-            BindAll(found);
+            Assign(found);
             Plugin.Log.LogInfo("Creatures: " + string.Join(", ", Groups.Select(g => Creatures.Count(c => c.Group == g) + " " + g.ToLowerInvariant()).ToArray()) +
                 (Effect == null ? " (sand burst effect not found)" : ""));
             Plugin.Verbose("Other: " + string.Join(", ", Creatures.Where(c => c.Group == Other).Select(c => c.Key).ToArray()));
         }
 
-        // ------------------------------------------------------------------ per-creature config
-
-        public static bool IsCreatureSection(string section) { return Groups.Any(g => section.StartsWith(g + ": ")); }
-
-        public static string Section(Creature c) { return c.Group + ": " + SafeKey(c.Key); }
+        // ------------------------------------------------------------------ per-creature rules
 
         // Default difficulty tiers by prefab health (Health FSM "Health"): tougher creatures need more distance travelled and
         // more bosses killed, come in smaller groups, farther away, and only at higher car speed.
@@ -150,16 +145,13 @@ namespace Apocatremors
             new Tier(float.MaxValue, 40f, 3, 1, 1, 80f, 120f, 30f),   // lanky, juggernaut
         };
 
-        private static void BindAll(List<Creature> found)
+        private static void Assign(List<Creature> found)
         {
             var bosses = found.Where(c => c.Group == Bosses).OrderBy(c => c.Health).ThenBy(c => c.Key).ToList();
 
-            bool old = Plugin.Cfg.SaveOnConfigSet;
-            Plugin.Cfg.SaveOnConfigSet = false;
             Creatures.Clear();
             foreach (var c in found)
             {
-                string s = Section(c);
                 var t = Tiers.First(x => c.Health <= x.MaxHp);
                 float chance = 0f, km = t.Km, dMin = t.DMin, dMax = t.DMax, speed = t.Speed;
                 int bossKills = t.Bosses, gMin = t.GMin, gMax = t.GMax;
@@ -177,30 +169,11 @@ namespace Apocatremors
                 }
                 string name = Prettify(c.Key);
 
-                c.Chance = Plugin.Cfg.Bind(s, "Chance", chance, new ConfigDescription(
-                    "% chance to be picked per ambush roll (the rest of 100 % = nothing; 0 = never spawns)", new AcceptableValueRange<float>(0f, 100f)));
-                c.GroupMin = Plugin.Cfg.Bind(s, "GroupMin", gMin, new ConfigDescription(
-                    "Smallest group at heat 100 %", new AcceptableValueRange<int>(1, 50)));
-                c.GroupMax = Plugin.Cfg.Bind(s, "GroupMax", gMax, new ConfigDescription(
-                    "Largest group at heat 100 %", new AcceptableValueRange<int>(1, 50)));
-                c.DistanceMin = Plugin.Cfg.Bind(s, "DistanceMin", dMin, new ConfigDescription(
-                    "Nearest spawn distance from the car (m)", new AcceptableValueRange<float>(5f, 500f)));
-                c.DistanceMax = Plugin.Cfg.Bind(s, "DistanceMax", dMax, new ConfigDescription(
-                    "Farthest spawn distance from the car (m)", new AcceptableValueRange<float>(5f, 500f)));
-                c.MinCarSpeedKmh = Plugin.Cfg.Bind(s, "MinCarSpeedKmh", speed, new ConfigDescription(
-                    "Only picked while the car is at least this fast (km/h)", new AcceptableValueRange<float>(0f, 150f)));
-                c.MinTravelKm = Plugin.Cfg.Bind(s, "MinTravelKm", km, new ConfigDescription(
-                    "Only picked once the game's Distance Travelled is at least this far (km)", new AcceptableValueRange<float>(0f, 200f)));
-                c.MaxTravelKm = Plugin.Cfg.Bind(s, "MaxTravelKm", 0f, new ConfigDescription(
-                    "No longer picked beyond this Distance Travelled (km, 0 = no limit)", new AcceptableValueRange<float>(0f, 200f)));
-                c.MinBossKills = Plugin.Cfg.Bind(s, "MinBossKills", bossKills, new ConfigDescription(
-                    "Only picked once at least this many of the game's 7 bosses are dead", new AcceptableValueRange<int>(0, 7)));
-                c.Name = Plugin.Cfg.Bind(s, "Name", name, "Name used in the notification ({name})");
-                c.Plural = Plugin.Cfg.Bind(s, "Plural", Pluralize(name), "Plural name used in the notification ({plural})");
+                c.Chance = chance; c.GroupMin = gMin; c.GroupMax = gMax; c.DistanceMin = dMin; c.DistanceMax = dMax;
+                c.MinCarSpeedKmh = speed; c.MinTravelKm = km; c.MaxTravelKm = 0f; c.MinBossKills = bossKills;
+                c.Name = name; c.Plural = Pluralize(name);
                 Creatures.Add(c);
             }
-            Plugin.Cfg.SaveOnConfigSet = old;
-            Plugin.Cfg.Save();
         }
 
         // Killed bosses = true global bools Boss_* (Boss_Alpha_Nightwalker, Boss_Black_Juggernaut, Boss_Buzzgut, Boss_Collage_Teacher,
@@ -220,7 +193,7 @@ namespace Apocatremors
         public static float TotalChance(Func<Creature, bool> allowed)
         {
             float t = 0f;
-            foreach (var c in Creatures) if (allowed(c)) t += Mathf.Max(0f, c.Chance.Value);
+            foreach (var c in Creatures) if (allowed(c)) t += Mathf.Max(0f, c.Chance);
             return t;
         }
 
@@ -233,7 +206,7 @@ namespace Apocatremors
             foreach (var c in Creatures)
             {
                 if (!allowed(c)) continue;
-                float w = Mathf.Max(0f, c.Chance.Value);
+                float w = Mathf.Max(0f, c.Chance);
                 if (w <= 0f) continue;
                 if (r < w) return c;
                 r -= w;
@@ -280,12 +253,5 @@ namespace Apocatremors
         }
 
         private static float MaxAbs(Vector3 v) { return Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z))); }
-
-        internal static string SafeKey(string s)
-        {
-            var sb = new StringBuilder();
-            foreach (char ch in s) sb.Append("=\n\t\\\"'[]".IndexOf(ch) >= 0 ? '_' : ch);
-            return sb.ToString().Trim();
-        }
     }
 }

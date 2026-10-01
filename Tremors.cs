@@ -83,24 +83,27 @@ namespace Apocatremors
 
             if (!Plugin.Enabled.Value) return;
             if (Plugin.Pressed(Plugin.TestKey.Value)) { TestSpawn(car, carRb); return; }
-            if (Plugin.RespectPeacefulMode.Value && _peaceful != null && _peaceful.enabled) return;
+            if (Plugin.RespectPeacefulMode && _peaceful != null && _peaceful.enabled) return;
             if (_heat <= 0f) return;                                        // at the start: no clock runs
 
             bool patrol = PatrolLoaded();
-            if (car != null && carRb != null)
-                RunClock(_player, car, carRb, dt, patrol ? Plugin.PlayerCooldownMultiplier.Value : 1f, patrol ? Plugin.PlayerSkipChance.Value : 0f, false);
+            float skip = Plugin.SkipChance.Value;
+            if (patrol) skip = 100f - (100f - skip) * (100f - Plugin.PlayerSkipChance.Value) / 100f;   // both rolls must pass
+            RunClock(_player, car, carRb, dt, patrol ? Plugin.PlayerCooldownMultiplier.Value : 1f, skip, false);
             if (patrol && Plugin.AiCars.Value) AiTick(dt, car);
         }
 
-        // The clock only runs while the car drives at least MinSpeedKmh; when it runs out, roll (or skip) and restart it.
+        // The clock runs whenever the game runs (on foot too); once it is out, the roll waits until the car drives at least MinSpeedKmh
+        // - so after a long stretch on foot the ambush comes as soon as you drive off. Then roll (or skip) and restart the clock.
         private void RunClock(Clock clock, GameObject car, Rigidbody rb, float dt, float mult, float skipChance, bool ai)
         {
-            float kmh = rb.velocity.magnitude * 3.6f;
-            if (kmh < Plugin.MinSpeedKmh.Value) return;
             clock.Mult = Mathf.Max(0.1f, mult);
             if (clock.Cooldown < 0f) ResetCooldown(clock);
-            clock.Cooldown -= dt * (Plugin.HeatScalesCooldown.Value ? _heat : 1f);
+            clock.Cooldown -= dt * (Plugin.HeatScalesCooldown ? _heat : 1f);
             if (clock.Cooldown > 0f) return;
+            if (car == null || rb == null) return;                           // ready; waiting for a drive
+            float kmh = rb.velocity.magnitude * 3.6f;
+            if (kmh < Plugin.MinSpeedKmh) return;
             if (skipChance > 0f && UnityEngine.Random.value * 100f < skipChance)
             {
                 Plugin.Verbose(clock.Label + ": ambush roll skipped (" + skipChance.ToString("0") + " % skip chance)");
@@ -120,7 +123,7 @@ namespace Apocatremors
                 if (BepInEx.Bootstrap.Chainloader.PluginInfos.TryGetValue(PatrolGuid, out pi) && pi.Instance != null)
                 {
                     _markerType = pi.Instance.GetType().Assembly.GetType("Apocapatrol.PatrolMarker");
-                    Plugin.Log.LogInfo("Apocapatrol " + pi.Metadata.Version + " found" + (_markerType == null ? " but no PatrolMarker type - AI cars ignored" : "; AI cars " + (Plugin.AiCars.Value ? "rouse ambushes" : "ignored (AiCars off)")));
+                    Plugin.Log.LogInfo("Apocapatrol " + pi.Metadata.Version + " found" + (_markerType == null ? " but no PatrolMarker type - AI cars ignored" : "; AI cars " + (Plugin.AiCars.Value ? "rouse ambushes" : "ignored ([Apocapatrol] Enabled = false)")));
                 }
             }
             catch (Exception e) { Plugin.Log.LogWarning("Apocapatrol check: " + e.Message); }
@@ -153,12 +156,12 @@ namespace Apocatremors
             if (_aiCars.Count == 0) return;
             Vector3 p;
             if (!PlayerPos(out p)) return;
-            float maxD = Plugin.AiMaxPlayerDistance.Value;
+            float maxD = Plugin.AiMaxPlayerDistance;
             foreach (var a in _aiCars.Values)
             {
                 if (a.Go == null || a.Rb == null || a.Go == playerCar) continue;      // a car the player took over is the player's car
                 if ((a.Go.transform.position - p).sqrMagnitude > maxD * maxD) continue;
-                RunClock(a.Clock, a.Go, a.Rb, dt, Plugin.AiCooldownMultiplier.Value, Plugin.AiSkipChance.Value, true);
+                RunClock(a.Clock, a.Go, a.Rb, dt, Plugin.AiCooldownMultiplier, Plugin.AiSkipChance, true);
             }
         }
 
@@ -242,7 +245,7 @@ namespace Apocatremors
             if (km < 0f) return;
             _travelKm = km;
             _bossKills = Catalog.BossKills();
-            _heat = Mathf.Clamp(km / 10f * Mathf.Max(0f, Plugin.HeatPer10Km.Value), 0f, Mathf.Max(0.01f, Plugin.MaxHeat.Value));
+            _heat = Mathf.Clamp(km / 10f * Mathf.Max(0f, Plugin.HeatPer10Km), 0f, Mathf.Max(0.01f, Plugin.MaxHeat));
         }
 
         private static bool PlayerPos(out Vector3 p)
@@ -265,7 +268,7 @@ namespace Apocatremors
 
         private void TestSpawn(GameObject car, Rigidbody carRb)
         {
-            var forced = Catalog.Find(Plugin.TestType.Value);
+            var forced = Catalog.Find(Plugin.TestType);
             if (car != null && carRb != null) { Ambush(car.transform.position, Flat(carRb.velocity, car.transform.forward), forced, true, carRb.velocity.magnitude * 3.6f, null, false); return; }
             var cam = Camera.main;
             if (cam == null) return;
@@ -283,17 +286,17 @@ namespace Apocatremors
             float km = _travelKm;
             int bk = _bossKills;
             Func<Creature, bool> allowed = x => x.Allowed(kmh, km, bk);
-            if (test) allowed = x => x.Chance.Value > 0f;
+            if (test) allowed = x => x.Chance > 0f;
             var c = forced;
             if (c == null)
             {
                 c = Catalog.Roll(allowed);
-                if (c == null && test) c = Catalog.Creatures.Where(x => x.Chance.Value > 0f).OrderBy(x => UnityEngine.Random.value).FirstOrDefault()
+                if (c == null && test) c = Catalog.Creatures.Where(x => x.Chance > 0f).OrderBy(x => UnityEngine.Random.value).FirstOrDefault()
                                             ?? Catalog.Creatures.FirstOrDefault(x => x.Group == Catalog.Mutants);
             }
             if (c == null) { Plugin.Verbose((clock != null ? clock.Label : "Test") + ": ambush roll: nothing"); if (clock != null) ResetCooldown(clock); return; }
 
-            float r = Mathf.Max(Plugin.ClearRadius.Value, c.Radius + 0.5f);
+            float r = Mathf.Max(Plugin.ClearRadius, c.Radius + 0.5f);
             Vector3 ground;
             if (!FindSpot(origin, dir, r, c, out ground))
             {
@@ -303,10 +306,10 @@ namespace Apocatremors
                 return;
             }
 
-            int gMin = Mathf.Max(1, c.GroupMin.Value), gMax = Mathf.Max(gMin, c.GroupMax.Value);
+            int gMin = Mathf.Max(1, c.GroupMin), gMax = Mathf.Max(gMin, c.GroupMax);
             int baseN = UnityEngine.Random.Range(gMin, gMax + 1);
             int n = baseN;
-            if (!test && Plugin.HeatScalesGroup.Value) n = Mathf.Max(1, Mathf.FloorToInt(baseN * _heat + 0.5f));
+            if (!test && Plugin.HeatScalesGroup) n = Mathf.Max(1, Mathf.FloorToInt(baseN * _heat + 0.5f));
             if (!test) n = Mathf.Min(n, Mathf.Max(1, Plugin.MaxAlive.Value - _alive.Count - _emerging.Count));
             var spots = new List<Vector3> { ground };
             for (int i = 1; i < n; i++)
@@ -318,9 +321,9 @@ namespace Apocatremors
                 }
 
             Plugin.Log.LogInfo("Ambush: " + spots.Count + "x " + c.Key + ", heat " + (_heat * 100f).ToString("0") + " %" + (clock != null ? " (" + clock.Label + ")" : " (test)"));
-            string text = ai ? Plugin.AiNotificationText.Value : Plugin.NotificationText.Value;
+            string text = ai ? Plugin.AiNotificationText : Plugin.NotificationText;
             if (!string.IsNullOrEmpty(text))
-                Notice.Show(text.Replace("{plural}", c.Plural.Value).Replace("{name}", c.Name.Value).Replace("{count}", spots.Count.ToString()));
+                Notice.Show(text.Replace("{plural}", c.Plural).Replace("{name}", c.Name).Replace("{count}", spots.Count.ToString()));
             float delay = 0f;
             foreach (var s in spots)
             {
@@ -334,8 +337,8 @@ namespace Apocatremors
         private bool FindSpot(Vector3 origin, Vector3 dir, float r, Creature c, out Vector3 ground)
         {
             float mult = Mathf.Clamp(Plugin.DistanceMultiplier.Value, 0.1f, 10f);
-            float dMin = Mathf.Max(5f, c.DistanceMin.Value * mult), dMax = Mathf.Max(dMin, c.DistanceMax.Value * mult);
-            float spread = Mathf.Clamp(Plugin.SpreadAngle.Value, 0f, 180f);
+            float dMin = Mathf.Max(5f, c.DistanceMin * mult), dMax = Mathf.Max(dMin, c.DistanceMax * mult);
+            float spread = Mathf.Clamp(Plugin.SpreadAngle, 0f, 180f);
             for (int i = 0; i < MaxTries; i++)
             {
                 var d = Quaternion.Euler(0f, UnityEngine.Random.Range(-spread, spread), 0f) * dir;
@@ -353,14 +356,14 @@ namespace Apocatremors
             RaycastHit hit;
             if (!GroundHit(p, refY, out hit)) return false;
             ground = hit.point;
-            if (Vector3.Angle(hit.normal, Vector3.up) > Plugin.MaxSlope.Value) return false;
-            if (Mathf.Abs(hit.point.y - refY) > Plugin.MaxHeightDiff.Value) return false;
+            if (Vector3.Angle(hit.normal, Vector3.up) > Plugin.MaxSlope) return false;
+            if (Mathf.Abs(hit.point.y - refY) > Plugin.MaxHeightDiff) return false;
 
             for (int k = 0; k < 4; k++)
             {
                 var q = hit.point + Quaternion.Euler(0f, k * 90f + 45f, 0f) * Vector3.forward * (r + 0.5f);
                 RaycastHit h2;
-                if (!GroundHit(q, refY, out h2) || Mathf.Abs(h2.point.y - hit.point.y) > Plugin.FlatTolerance.Value) return false;
+                if (!GroundHit(q, refY, out h2) || Mathf.Abs(h2.point.y - hit.point.y) > Plugin.FlatTolerance) return false;
             }
             if (NearStructure(hit.point)) return false;
 
@@ -384,7 +387,7 @@ namespace Apocatremors
         private bool NearStructure(Vector3 p)
         {
             if (Time.unscaledTime >= _nextPoiScan) { _nextPoiScan = Time.unscaledTime + 5f; ScanPois(); }
-            float buf = Mathf.Max(0f, Plugin.StructureBuffer.Value);
+            float buf = Mathf.Max(0f, Plugin.StructureBuffer);
             foreach (var poi in _pois)
             {
                 if (poi.T == null) continue;
@@ -469,7 +472,7 @@ namespace Apocatremors
                 {
                     if (_wait > 0f) { _wait -= dt; return false; }
                     _fx = Burst(_ground);
-                    _wait = Mathf.Max(0f, Plugin.EffectLeadSeconds.Value);
+                    _wait = Mathf.Max(0f, Plugin.EffectLeadSeconds);
                     _stage = 1;
                     return false;
                 }
@@ -489,11 +492,11 @@ namespace Apocatremors
                 if (!_burstDone && _remaining <= _burstAt)
                 {
                     _burstDone = true;
-                    if (Plugin.SurfaceBurst.Value) Burst(_go.transform.position + Vector3.up * _top);
+                    if (Plugin.SurfaceBurst) Burst(_go.transform.position + Vector3.up * _top);
                 }
                 if (_remaining > 0.0001f) return false;
                 Release();
-                if (Plugin.RegisterWithGame.Value) Register(_go);
+                if (Plugin.RegisterWithGame) Register(_go);
                 _owner._alive.Add(_go);
                 return true;
             }
@@ -540,7 +543,7 @@ namespace Apocatremors
                 var pos = _go.transform.position; pos.y = startY; pos.x = _ground.x; pos.z = _ground.z;
                 _go.transform.position = pos;
                 _remaining = Mathf.Max(0.01f, endY - startY);
-                _speed = _remaining / Mathf.Max(0.05f, Plugin.RiseSeconds.Value);
+                _speed = _remaining / Mathf.Max(0.05f, Plugin.RiseSeconds);
                 _burstAt = _remaining - (top + 0.2f);   // the moment the top breaks the surface
                 if (_burstAt <= 0f) _burstDone = true;
                 return true;

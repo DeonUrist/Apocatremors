@@ -21,11 +21,11 @@ namespace Apocatremors
             if (!Plugin.ShowNotification.Value || string.IsNullOrEmpty(message) || !Ensure()) return;
             _text.text = message;
             Color col;
-            if (ColorUtility.TryParseHtmlString(Plugin.NotificationColor.Value, out col)) _text.color = col;
+            if (ColorUtility.TryParseHtmlString(Plugin.NotificationColor, out col)) _text.color = col;
             Place();
             _clone.SetActive(true);
             _clone.transform.SetAsLastSibling();
-            _left = Mathf.Max(0.5f, Plugin.NotificationSeconds.Value);
+            _left = Mathf.Max(0.5f, Plugin.NotificationSeconds);
         }
 
         public static void Tick(float dt)
